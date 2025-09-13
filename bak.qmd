@@ -1,0 +1,1895 @@
+---
+title: "Análisis exploratorio de incendios forestales ocurridos en California durante 1960 y 2024"
+author: "Mariela Alvarado, Manuel Vargas"
+date: "2025-09-09"
+format: html
+toc: true
+lang: es
+theme: cosmo
+---
+
+# Introducción
+
+Los incendios forestales representan una de las amenazas medioambientales más críticas del siglo XXI. Además de destruir ecosistemas y biodiversidad, estos eventos comprometen la salud pública, la seguridad de las comunidades y la estabilidad económica, lo que evidencia la urgente necesidad de herramientas analíticas que permitan comprender y mitigar su impacto. Mediante técnicas de procesamiento y análisis espacial de datos geográficos, el presente estudio se enfoca en la incidencia de incendios forestales como una manifestación del cambio climático. A través del lenguaje de programación R, se desarrolló un sistema de visualización e interpretación geoespacial que integra datos vectoriales y ráster. El análisis se centró en el estado de California, Estados Unidos, una región particularmente vulnerable a eventos extremos asociados al calentamiento global.
+
+Este documento presenta un análisis exploratorio de los datos de incendios forestales facilitados por el [Departamento de Silvicultura y Protección contra Incendios de California (CAL FIRE)](https://www.fire.ca.gov/), a los cuales se les unieron datos de temperatura provenientes del [Reanálisis atmosférico de quinta generación del ECMWF (ERA5)](https://cds.climate.copernicus.eu/).
+
+```{r}
+#| label: cargar-bibliotecas
+#| warning: false
+#| message: false
+#| code-fold: true
+#| echo: false
+
+library(tidyverse)
+library(tibble)
+library(lubridate)
+library(DT)
+library(plotly)
+library(scales)
+library(terra)
+library(tmap)
+library(leaflet)
+library(RColorBrewer)
+```
+
+```{r}
+#| label: cargar-datos-incendios
+#| warning: false
+#| message: false
+#| code-fold: true
+#| echo: false
+
+# Leer archivo
+# incendios <- read_csv("incendios-ca-historicos-1980-2024.csv")
+incendios <- read_csv("datos/incendios_ca_2m_temperature_mean_ca_diaria_1960-1960.csv")
+
+# Eliminar incendios que no tienen ALARM_DATE
+incendios <-
+  incendios |>
+  drop_na(ALARM_DATE)
+
+# Incendios agrupados por año
+incendios_por_anio <-
+  incendios |>
+  mutate(
+    anio = year(ALARM_DATE)
+  ) |>
+  group_by(anio) |>
+  summarise(
+    n                                         = n(),
+    area_quemada_total                        = sum(GIS_ACRES, na.rm = TRUE),
+    temperatura_2m_promedio_hora_fecha_alarma = mean(
+      TEMPERATURE_2M_ALARM_DATE_MEAN, 
+      na.rm                                   = TRUE
+    ),
+    .groups                                   = "drop"
+  )
+
+# Incendios agrupados por año y mes
+incendios_por_anio_mes <-
+  incendios |>
+  mutate(
+    anio = year(ALARM_DATE),
+    mes  = month(ALARM_DATE, label = TRUE, abbr = TRUE)
+  ) |>
+  group_by(anio, mes) |>
+  summarise(
+    n                                         = n(),
+    area_quemada_total                        = sum(GIS_ACRES, na.rm = TRUE),
+    temperatura_2m_promedio_hora_fecha_alarma = mean(
+      TEMPERATURE_2M_ALARM_DATE_MEAN, 
+      na.rm = TRUE
+    ),
+    .groups                                   = "drop"
+  )
+
+# Asegurar que los meses queden en orden enero-diciembre
+incendios_por_anio_mes$mes <- factor(
+  incendios_por_anio_mes$mes,
+  levels = month(ymd("2025-01-01") + months(0:11), label = TRUE, abbr = TRUE)
+)
+
+# Traducir las abreviaturas de los meses a español
+incendios_por_anio_mes <-
+  incendios_por_anio_mes |>
+    mutate(
+      mes = factor(
+        mes,
+        levels = month.abb,
+        labels = c("Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                   "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
+      )
+    )
+```
+
+```{r}
+#| label: cargar-datos-variables-climaticas-60m
+#| warning: false
+#| message: false
+#| code-fold: true
+#| echo: false
+
+# Temperatura del aire a 2m
+temperature_2m <- rast("2m_temperature_ca_promedio_1980-2024.tif")
+# Temperatura de la superficie de la Tierra
+skin_temperature <- rast("skin_temperature_ca_promedio_1980-2024.tif")
+# Temperatura del suelo nivel 1
+soil_temperature_level_1 <- rast("soil_temperature_level_1_ca_promedio_1980-2024.tif")
+# Precipitación total mensual
+total_precipitation <- rast("total_precipitation_ca_promedio_1980-2024.tif")
+# Componente u (este-oeste) del viento a 10 m
+u_component_of_wind_10m <- rast("10m_u_component_of_wind_ca_promedio_1980-2024.tif")
+# Componente v (norte-sur) del viento a 10 m
+v_component_of_wind_10m <- rast("10m_v_component_of_wind_ca_promedio_1980-2024.tif")
+# Velocidad del viento a 10 m
+wind_speed_10m <- rast("wind_speed_kmh_10m_promedio_1980-2024.tif")
+# Dirección del viento (desde)
+wind_dir_from_10m <- rast("wind_dir_from_10m_promedio_1980-2024.tif")
+# Dirección del viento (hacia)
+wind_dir_to_10m <- rast("wind_dir_to_10m_promedio_1980-2024.tif")
+# Índice de área foliar (LAI) – vegetación alta
+lai_high_vegetation <- rast("leaf_area_index_high_vegetation_ca_promedio_1980-2024.tif")
+# Índice de área foliar (LAI) – vegetación baja
+lai_low_vegetation <- rast("leaf_area_index_low_vegetation_ca_promedio_1980-2024.tif")
+
+# Renombrar las capas de las variables climáticas
+nombres_capas_variables_climaticas <- c(
+  "1980–1984", "1985–1989", "1990–1994",
+  "1995–1999", "2000–2004", "2005–2009",
+  "2010–2014", "2015–2019", "2020–2024"
+)
+names(temperature_2m)           <- nombres_capas_variables_climaticas
+names(skin_temperature)         <- nombres_capas_variables_climaticas
+names(soil_temperature_level_1) <- nombres_capas_variables_climaticas
+names(total_precipitation)      <- nombres_capas_variables_climaticas
+names(u_component_of_wind_10m)  <- nombres_capas_variables_climaticas
+names(v_component_of_wind_10m)  <- nombres_capas_variables_climaticas
+names(lai_high_vegetation)      <- nombres_capas_variables_climaticas
+names(lai_low_vegetation)       <- nombres_capas_variables_climaticas
+
+# Paletas de colores de las variables climáticas
+paleta_temperature              <- "-RdYlBu"
+paleta_temperature_2m           <- paleta_temperature
+paleta_skin_temperature         <- paleta_temperature
+paleta_soil_temperature_level_1 <- paleta_temperature
+paleta_total_precipitation      <- "PuBuGn"
+paleta_u_component_of_wind_10m  <- "PuOr"
+paleta_v_component_of_wind_10m  <- "PuOr"
+paleta_wind_speed_10m           <- "YlOrRd"
+paleta_wind_dir_from_10m        <- "matplotlib.twilight"
+paleta_wind_dir_to_10m          <- "matplotlib.twilight_shifted"
+paleta_lai_high_vegetation      <- "YlGn"
+paleta_lai_low_vegetation       <- "YlGn"
+
+# Rango global de las variables de temperatura
+global_min_temperature <- min(
+  minmax(temperature_2m)[1, ],
+  minmax(skin_temperature)[1, ],
+  minmax(soil_temperature_level_1)[1, ]
+)
+global_max_temperature <- max(
+  minmax(temperature_2m)[2, ],
+  minmax(skin_temperature)[2, ],
+  minmax(soil_temperature_level_1)[2, ]
+)
+
+# Escala global de temperatura
+escala_temperature <- tm_scale_continuous(
+  limits       = c(global_min_temperature, global_max_temperature),
+  values       = paleta_temperature,
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+# Rango global de total_precipitation
+global_min_total_precipitation <- min(
+  minmax(total_precipitation)[1, ]
+)
+global_max_total_precipitation <- max(
+  minmax(total_precipitation)[2, ]
+)
+
+# Escala global de total_precipitation
+escala_total_precipitation <- tm_scale_continuous(
+  limits       = c(global_min_total_precipitation, global_max_total_precipitation),
+  values       = paleta_total_precipitation,
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+```
+
+```{r}
+#| label: cargar-datos-variables-climaticas-12m
+#| warning: false
+#| message: false
+#| code-fold: true
+#| echo: false
+
+# Temperatura del aire a 2m
+temperature_2m_12m <- rast("2m_temperature_ca_promedio_1960-2024-12m.tif")
+# Temperatura de la superficie del suelo
+skin_temperature_12m <- rast("skin_temperature_ca_promedio_1960-2024-12m.tif")
+# Temperatura del suelo en el nivel 1 (0 - 7 cm)
+soil_temperature_level_1_12m <- rast("soil_temperature_level_1_ca_promedio_1960-2024-12m.tif")
+# Precipitación total
+total_precipitation_12m <- rast("total_precipitation_ca_promedio_1960-2024-12m.tif")
+# Velocidad del viento a 10 m
+wind_speed_10m_12m <- rast("wind_speed_kmh_10m_promedio_1960-2024.tif")
+# Índice de área foliar (LAI) – vegetación baja
+lai_low_vegetation_12m <- rast("leaf_area_index_low_vegetation_ca_promedio_1960-2024-12m.tif")
+
+# Renombrar las capas de las variables climáticas
+nombres_capas_variables_climaticas <- c(
+  "1960", "1961", "1962", "1963", "1964",
+  "1965", "1966", "1967", "1968", "1969",
+  "1970", "1971", "1972", "1973", "1974",
+  "1975", "1976", "1977", "1978", "1979",
+  "1980", "1981", "1982", "1983", "1984",
+  "1985", "1986", "1987", "1988", "1989",
+  "1990", "1991", "1992", "1993", "1994",
+  "1995", "1996", "1997", "1998", "1999",
+  "2000", "2001", "2002", "2003", "2004", 
+  "2005", "2006", "2007", "2008", "2009", 
+  "2010", "2011", "2012", "2013", "2014", 
+  "2015", "2016", "2017", "2018", "2019", 
+  "2020", "2021", "2022", "2023", "2024"
+)
+
+names(temperature_2m_12m)           <- nombres_capas_variables_climaticas
+names(skin_temperature_12m)         <- nombres_capas_variables_climaticas
+names(soil_temperature_level_1_12m) <- nombres_capas_variables_climaticas
+names(total_precipitation_12m)      <- nombres_capas_variables_climaticas
+names(wind_speed_10m_12m)           <- nombres_capas_variables_climaticas
+names(lai_low_vegetation_12m)       <- nombres_capas_variables_climaticas
+```
+
+# Registros de incendios
+
+```{r}
+#| label: tabla-incendios
+#| code-fold: true
+
+# Definir la tabla DT
+t <-
+  incendios |>
+  select(FIRE_NAME, ALARM_DATE, GIS_ACRES, TEMPERATURE_2M_ALARM_DATE_MEAN) |>
+  arrange(ALARM_DATE) |>
+  datatable(
+    rownames = FALSE,
+    colnames = c("Nombre del incendio", "Fecha de alarma", "Área quemada (acres)", "Temperatura (°C)"),
+    options = list(
+      pageLength = 10,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+
+# Mostrar la tabla
+t
+```
+
+
+# Análisis por año
+
+## Cantidad de incendios
+
+```{r}
+#| label: grafico-cantidad-incendios-por-anio
+#| warning: false
+#| message: false
+#| code-fold: true
+
+# Gráfico ggplot2 de líneas + tendencia
+g <-
+  ggplot(
+    incendios_por_anio, 
+    aes(
+      x = anio, 
+      y = n, 
+      group = 1,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Cantidad de incendios: ", comma(n)
+      )
+    )
+  ) +
+  geom_line(color = "red", linewidth = 1) + # línea principal
+  geom_point(color = "red", size = 2) +     # puntos sobre la línea
+  geom_smooth(method = "lm", se = FALSE,    # línea de tendencia
+              linetype = "dashed", linewidth = 0.8,
+              color = "gray30") +
+  labs(
+    x = "Año",
+    y = "Cantidad de incendios"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
+
+# Mostrar el gráfico
+g_interactivo
+```
+
+## Área quemada
+
+```{r}
+#| label: grafico-area-quemada-por-anio
+#| warning: false
+#| message: false
+#| code-fold: true
+
+# Gráfico ggplot2 de líneas + tendencia
+g <-
+  ggplot(
+    incendios_por_anio,
+    aes(
+      x = anio,
+      y = area_quemada_total,
+      group = 1,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Área quemada (acres): ", comma(area_quemada_total), " acres"
+      )
+    )
+  ) +
+  geom_line(color = "red", linewidth = 1) + # línea principal
+  geom_point(color = "red", size = 2) +     # puntos
+  geom_smooth(method = "lm", se = FALSE,    # línea de tendencia
+              linetype = "dashed", linewidth = 0.8,
+              color = "gray30") +
+  labs(
+    x = "Año",
+    y = "Área quemada (acres)"
+  ) +
+  scale_y_continuous(labels = comma) + # separador de miles en eje Y
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
+
+# Mostrar el gráfico
+g_interactivo
+```
+
+## Temperatura promedio del centroide del incendio a la hora de emisión de la alarma
+
+```{r}
+#| label: grafico-temperatura-por-anio
+#| warning: false
+#| message: false
+#| code-fold: true
+
+# Gráfico ggplot2 de líneas + tendencia
+g <-
+  ggplot(
+    incendios_por_anio,
+    aes(
+      x = anio,
+      y = temperatura_2m_promedio_hora_fecha_alarma,
+      group = 1,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Temperatura promedio: ",
+        number(temperatura_2m_promedio_hora_fecha_alarma, accuracy = 0.1), " °C"
+      )
+    )
+  ) +
+  geom_line(color = "red", linewidth = 1) + # línea principal
+  geom_point(color = "red", size = 2) +     # puntos
+  geom_smooth(method = "lm", se = FALSE,    # tendencia lineal
+              linetype = "dashed", linewidth = 0.8,
+              color = "gray30") +
+  labs(
+    x = "Año",
+    y = "Temperatura promedio (°C)"
+  ) +
+  scale_y_continuous(labels = number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
+
+# Mostrar gráfico interactivo
+g_interactivo
+```
+
+# Análisis por mes
+
+## Cantidad de incendios
+
+```{r}
+#| label: grafico-cantidad-incendios-por-anio-mes
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Sumar la cantidad de incendios por mes (todos los años)
+incendios_mes_total <- 
+  incendios_por_anio_mes |>
+  group_by(mes) |>
+  summarise(n = sum(n), .groups = "drop")
+
+# Gráfico ggplot2 de barras (una por mes)
+g <-
+  ggplot(
+    incendios_mes_total,
+    aes(
+      x    = mes,
+      y    = n,
+      text = sprintf("Mes: %s<br>Cantidad de incendios: %d", mes, n)
+    )
+  ) +
+  geom_col(fill = "firebrick") +
+  labs(
+    x = "Mes",
+    y = "Cantidad de incendios"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+g_interactivo <- ggplotly(g, tooltip = "text")  |> config(locale = 'es')
+
+# Mostrar el gráfico interactivo
+g_interactivo
+```
+
+## Área quemada
+
+```{r}
+#| label: grafico-area-quemada-por-anio-mes
+#| code-fold: true
+
+# Sumar el área quemada por mes (todos los años)
+incendios_area_total <- 
+  incendios_por_anio_mes |>
+  group_by(mes) |>
+  summarise(area_quemada_total = sum(area_quemada_total), .groups = "drop")
+
+# Gráfico ggplot2 de barras (una por mes)
+g <-
+  ggplot(
+    incendios_area_total,
+    aes(
+      x = mes,
+      y = area_quemada_total,
+      text = sprintf(
+        "Mes: %s<br>Área quemada: %s acres",
+        mes,
+        comma(area_quemada_total)
+      )
+    )
+  ) +
+  geom_col(fill = "firebrick") +
+  labs(
+    x = "Mes",
+    y = "Área quemada (acres)"
+  ) +
+  scale_y_continuous(
+    labels = comma,
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = "es")
+
+# Mostrar gráfico interactivo
+g_interactivo
+```
+
+## Temperatura promedio del centroide del incendio a la hora de emisión de la alarma
+
+```{r}
+#| label: grafico-temperatura-por-anio-mes
+#| code-fold: true
+
+# Calcular la temperatura promedio por mes (promedio de todos los años)
+temperatura_mes_promedio <- 
+  incendios_por_anio_mes |>
+  group_by(mes) |>
+  summarise(
+    temperatura_2m_promedio_hora_fecha_alarma = mean(
+      temperatura_2m_promedio_hora_fecha_alarma, 
+      na.rm = TRUE
+    ),
+    .groups                                   = "drop"
+  )
+
+# Gráfico ggplot2 de barras (una por mes)
+g <-
+  ggplot(
+    temperatura_mes_promedio,
+    aes(
+      x = mes,
+      y = temperatura_2m_promedio_hora_fecha_alarma,
+      text = sprintf(
+        "Mes: %s<br>Temp. promedio: %.1f °C",
+        mes, temperatura_2m_promedio_hora_fecha_alarma
+      )
+    )
+  ) +
+  geom_col(fill = "firebrick") +
+  labs(
+    x = "Mes",
+    y = "Temperatura promedio (°C)"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = "es")
+
+# Mostrar gráfico interactivo
+g_interactivo
+```
+
+# Promedios anuales de variables climáticas
+
+## Temperatura a 2 m
+
+```{r}
+#| label: grafico-2m-temperature-promedio-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(temperature_2m_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(temperature_2m_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(temperature_2m_12m))
+
+temp_anual <- tibble(anio = anios, temp_c = vals) |> arrange(anio)
+
+# Cortes cada 5 años
+breaks_5 <- seq(floor(min(temp_anual$anio)/5)*5,
+                ceiling(max(temp_anual$anio)/5)*5, by = 5)
+
+g <- ggplot(
+  temp_anual,
+  aes(x = anio, y = temp_c, group = 1, 
+      text = paste0("Año: ", anio,
+                    "<br>Temp. media: ", scales::number(temp_c, accuracy = 0.1), " °C"))
+) +
+  geom_line(color = "red", linewidth = 1) +
+  geom_point(color = "red", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = "gray30") +
+  labs(x = "Año", y = "Temperatura media a 2m (°C)") +
+  scale_x_continuous(breaks = breaks_5) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+**Diferencia 2024 – 1960**
+
+```{r}
+#| label: mapa-diferencia-temperatura_2m-2024-1960
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# --------------------------
+# Diferencia de temperatura
+# 2024 - 1960
+# --------------------------
+temp_diff <- temperature_2m_12m[["2024"]] - temperature_2m_12m[["1960"]]
+
+# Rango simétrico alrededor de 0 °C para la paleta divergente
+rango <- max(abs(minmax(temp_diff)))   # mismo valor para |mín| y |máx|
+escala_diff <- tm_scale_continuous(
+  limits       = c(-rango, rango),
+  values       = "-RdBu",   # azul = enfriamiento, rojo = calentamiento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(temp_diff) +
+  tm_raster(
+    col.scale  = escala_diff,
+    col.legend = tm_legend(title = "Δ Temp (°C)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Temperatura de la supeficie del suelo
+
+```{r}
+#| label: grafico-skin-temperature-promedio-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(skin_temperature_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(skin_temperature_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(skin_temperature_12m))
+
+temp_anual <- tibble(anio = anios, temp_c = vals) |> arrange(anio)
+
+# Cortes cada 5 años
+breaks_5 <- seq(floor(min(temp_anual$anio)/5)*5,
+                ceiling(max(temp_anual$anio)/5)*5, by = 5)
+
+g <- ggplot(
+  temp_anual,
+  aes(x = anio, y = temp_c, group = 1, 
+      text = paste0("Año: ", anio,
+                    "<br>Temp. media: ", scales::number(temp_c, accuracy = 0.1), " °C"))
+) +
+  geom_line(color = "red", linewidth = 1) +
+  geom_point(color = "red", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = "gray30") +
+  labs(x = "Año", y = "Temperatura media de la superficie del suelo (°C)") +
+  scale_x_continuous(breaks = breaks_5) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+## Temperatura del suelo en el nivel 1 (0 - 7 cm de profundidad)
+
+```{r}
+#| label: grafico-soil-temperature-level-1-promedio-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(soil_temperature_level_1_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(soil_temperature_level_1_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(soil_temperature_level_1_12m))
+
+temp_anual <- tibble(anio = anios, temp_c = vals) |> arrange(anio)
+
+# Cortes cada 5 años
+breaks_5 <- seq(floor(min(temp_anual$anio)/5)*5,
+                ceiling(max(temp_anual$anio)/5)*5, by = 5)
+
+g <- ggplot(
+  temp_anual,
+  aes(x = anio, y = temp_c, group = 1, 
+      text = paste0("Año: ", anio,
+                    "<br>Temp. media: ", scales::number(temp_c, accuracy = 0.1), " °C"))
+) +
+  geom_line(color = "red", linewidth = 1) +
+  geom_point(color = "red", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = "gray30") +
+  labs(x = "Año", y = "Temperatura media del suelo a 0-7 cm de profundidad (°C)") +
+  scale_x_continuous(breaks = breaks_5) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+## Precipitación total
+
+```{r}
+#| label: grafico-total-precipitation-promedio-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(total_precipitation_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(total_precipitation_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(total_precipitation_12m))
+
+prec_anual <- tibble(anio = anios, prec_mm = vals) |> arrange(anio)
+
+# Cortes cada 5 años
+breaks_5 <- seq(floor(min(prec_anual$anio)/5)*5,
+                ceiling(max(prec_anual$anio)/5)*5, by = 5)
+
+g <- ggplot(
+  prec_anual,
+  aes(x = anio, y = prec_mm, group = 1, 
+      text = paste0("Año: ", anio,
+                    "<br>Precipitación: ", scales::number(prec_mm, accuracy = 0.1), " °C"))
+) +
+  geom_line(color = "blue", linewidth = 1) +
+  geom_point(color = "blue", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = "gray30") +
+  labs(x = "Año", y = "Precipitación total promedio (mm)") +
+  scale_x_continuous(breaks = breaks_5) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+**Diferencia 2024 – 1960**
+
+```{r}
+#| label: mapa-diferencia-total_precipitation-2024-1960
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# --------------------------
+# Diferencia
+# 2024 - 1960
+# --------------------------
+prec_diff <- total_precipitation_12m[["2024"]] - temperature_2m_12m[["1960"]]
+
+# Rango simétrico alrededor de 0 °C para la paleta divergente
+rango <- max(abs(minmax(prec_diff)))   # mismo valor para |mín| y |máx|
+escala_diff <- tm_scale_continuous(
+  limits       = c(-rango, rango),
+  values       = "-RdBu",   # azul = enfriamiento, rojo = calentamiento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(prec_diff) +
+  tm_raster(
+    col.scale  = escala_diff,
+    col.legend = tm_legend(title = "Δ Temp (°C)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Velocidad del viento a 10 m
+
+```{r}
+#| label: grafico-wind-speed-promedio-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(wind_speed_10m_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(wind_speed_10m_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(wind_speed_10m_12m))
+
+wind_speed_anual <- tibble(anio = anios, windspeed_kmh = vals) |> arrange(anio)
+
+# Cortes cada 5 años
+breaks_5 <- seq(floor(min(wind_speed_anual$anio)/5)*5,
+                ceiling(max(wind_speed_anual$anio)/5)*5, by = 5)
+
+g <- ggplot(
+  wind_speed_anual,
+  aes(x = anio, y = windspeed_kmh, group = 1, 
+      text = paste0("Año: ", anio,
+                    "<br>Velocidad del viento a 10 m: ", scales::number(windspeed_kmh, accuracy = 0.1), " °C"))
+) +
+  geom_line(color = "lightblue", linewidth = 1) +
+  geom_point(color = "lightblue", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = "gray30") +
+  labs(x = "Año", y = "Velocidad promedio del viento a 10 m (kmh)") +
+  scale_x_continuous(breaks = breaks_5) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+## Índice de área foliar (LAI) - vegetación baja
+
+```{r}
+#| label: grafico-lai-low-vegetation-promedio-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(lai_low_vegetation_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(lai_low_vegetation_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(lai_low_vegetation_12m))
+
+lai_anual <- tibble(anio = anios, lai = vals) |> arrange(anio)
+
+# Cortes cada 5 años
+breaks_5 <- seq(floor(min(lai_anual$anio)/5)*5,
+                ceiling(max(lai_anual$anio)/5)*5, by = 5)
+
+g <- ggplot(
+  lai_anual,
+  aes(x = anio, y = lai, group = 1, 
+      text = paste0("Año: ", anio,
+                    "<br>LAI: ", scales::number(lai, accuracy = 0.1), " °C"))
+) +
+  geom_line(color = "lightgreen", linewidth = 1) +
+  geom_point(color = "lightgreen", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = "gray30") +
+  labs(x = "Año", y = "LAI") +
+  scale_x_continuous(breaks = breaks_5) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+# Análisis por mes y año
+
+## Cantidad de incendios
+
+```{r}
+#| label: grafico-cantidad-incendios-por-mes-anio
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+# Heatmap
+g <-
+  ggplot(
+    incendios_por_anio_mes,
+    aes(
+      x = mes,
+      y = factor(anio),
+      fill = n,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Mes: ", mes,
+        "<br>Cantidad de incendios: ", n
+      )
+    )
+  ) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(name = "Incendios", option = "inferno", direction = -1) +
+  labs(
+    x = "Mes",
+    y = "Año"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+# g_interactivo <- 
+#   ggplotly(g, tooltip = "text", height = 700) |> 
+#   config(locale = 'es')
+
+# Mostrar gráfico
+g
+```
+
+## Área quemada
+
+```{r}
+#| label: grafico-area-quemada-por-mes-anio
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+# Heatmap
+g <-
+  ggplot(
+    incendios_por_anio_mes,
+    aes(
+      x = mes,
+      y = factor(anio),
+      fill = area_quemada_total,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Mes: ", mes,
+        "<br>Área quemada: ", comma(area_quemada_total, accuracy = 1), " acres"
+      )
+    )
+  ) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(
+    name       = "Área (acres)",
+    option     = "inferno",
+    direction  = -1,
+    labels     = label_number(accuracy = 1, big.mark = ",")
+  ) +
+  labs(
+    x = "Mes",
+    y = "Año"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Versión interactiva
+# g_interactivo <- 
+#   ggplotly(g, tooltip = "text", height = 700) |> 
+#   config(locale = 'es')
+
+# Mostrar el gráfico
+g
+```
+
+## Temperatura promedio del centroide del incendio a la hora de emisión de la alarma
+
+```{r}
+#| label: grafico-temperatura-promedio-por-mes-anio
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+# Heatmap
+g <-
+  ggplot(
+    incendios_por_anio_mes,
+    aes(
+      x = mes,
+      y = factor(anio),
+      fill = temperatura_2m_promedio_hora_fecha_alarma,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Mes: ", mes,
+        "<br>Temperatura promedio: ", comma(temperatura_2m_promedio_hora_fecha_alarma, accuracy = 0.1), " °C"
+      )
+    )
+  ) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(
+    name       = "Temperatura (°C)",
+    option     = "inferno",
+    direction  = -1,
+    labels     = label_number(accuracy = 1, big.mark = ",")
+  ) +
+  labs(
+    x = "Mes",
+    y = "Año"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Versión interactiva
+# g_interactivo <- 
+#  ggplotly(g, tooltip = "text", height = 700) |> 
+#  config(locale = 'es')
+
+# Mostrar el gráfico
+g
+```
+
+# Mapas de variables climáticas
+
+## Temperatura promedio del aire a 2 m
+
+```{r}
+#| label: mapa-temperatura_2m-promedio
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(temperature_2m) +
+  tm_raster(
+    col.scale  = escala_temperature,
+    col.legend = tm_legend(title = "°C")
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-temperatura_2m-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# --------------------------
+# Diferencia de temperatura
+# (2020–2024) – (1980–1984)
+# --------------------------
+temp_diff <- temperature_2m[["2020–2024"]] - temperature_2m[["1980–1984"]]
+
+# Rango simétrico alrededor de 0 °C para la paleta divergente
+rango <- max(abs(minmax(temp_diff)))   # mismo valor para |mín| y |máx|
+escala_diff <- tm_scale_continuous(
+  limits       = c(-rango, rango),
+  values       = "-RdBu",   # azul = enfriamiento, rojo = calentamiento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(temp_diff) +
+  tm_raster(
+    col.scale  = escala_diff,
+    col.legend = tm_legend(title = "Δ Temp (°C)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Temperatura promedio de la superficie de la Tierra
+
+```{r}
+#| label: mapa-temperatura_superficie-promedio
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(skin_temperature) +
+  tm_raster(
+    col.scale  = escala_temperature,
+    col.legend = tm_legend(title = "°C")
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-temperatura_superficie-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# --------------------------
+# Diferencia de temperatura
+# de la superficie
+# (2020–2024) – (1980–1984)
+# --------------------------
+skin_diff <- skin_temperature[["2020–2024"]] - skin_temperature[["1980–1984"]]
+
+# Rango simétrico alrededor de 0 °C
+rango_skin <- max(abs(minmax(skin_diff)))
+
+escala_skin_diff <- tm_scale_continuous(
+  limits       = c(-rango_skin, rango_skin),
+  values       = "-RdBu",
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(skin_diff) +
+  tm_raster(
+    col.scale  = escala_skin_diff,
+    col.legend = tm_legend(title = "Δ Temp (°C)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Temperatura promedio del suelo (0 - 7 cm)
+
+```{r}
+#| label: mapa-temperatura_suelo-nivel_1-promedio
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(soil_temperature_level_1) +
+  tm_raster(
+    col.scale  = escala_temperature,
+    col.legend = tm_legend(title = "°C")
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-temperatura_suelo_nivel1-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# --------------------------
+# Diferencia de temperatura
+# del suelo nivel 1
+# (2020–2024) – (1980–1984)
+# --------------------------
+soil_diff <- soil_temperature_level_1[["2020–2024"]] - soil_temperature_level_1[["1980–1984"]]
+
+# Rango simétrico alrededor de 0 °C
+rango_soil <- max(abs(minmax(soil_diff)))
+
+escala_soil_diff <- tm_scale_continuous(
+  limits       = c(-rango_soil, rango_soil),
+  values       = "-RdBu",
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(soil_diff) +
+  tm_raster(
+    col.scale  = escala_soil_diff,
+    col.legend = tm_legend(title = "Δ Temp (°C)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Precipitación total mensual promedio
+
+```{r}
+#| label: mapa-precipitacion_total_mensual-promedio
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(total_precipitation) +
+  tm_raster(
+    col.scale  = escala_total_precipitation,
+    col.legend = tm_legend(title = "mm")
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-precipitacion_total_mensual-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# -------------------------------------------
+# Diferencia de precipitación (mm / mes)
+# (2020–2024) – (1980–1984)
+# -------------------------------------------
+precip_diff <- total_precipitation[["2020–2024"]] - total_precipitation[["1980–1984"]]
+
+# Rango simétrico alrededor de 0 mm
+rango_precip <- max(abs(minmax(precip_diff)))
+
+escala_precip_diff <- tm_scale_continuous(
+  limits       = c(-rango_precip, rango_precip),
+  values       = "-BrBG",   # marrón = disminución, azul-verde = aumento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(precip_diff) +
+  tm_raster(
+    col.scale  = escala_precip_diff,
+    col.legend = tm_legend(title = "Δ Precipitación (mm)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Componente u (este-oeste) del viento a 10 m
+
+```{r}
+#| label: mapa-componente-u-viento
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(u_component_of_wind_10m) +
+  tm_raster(
+    palette = paleta_u_component_of_wind_10m,
+    style   = "cont",
+    title   = "m s⁻¹"
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-componente_u-viento-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# -------------------------------------------
+# Diferencia del componente u (m s⁻¹)
+# (2020–2024) – (1980–1984)
+# -------------------------------------------
+u_diff <- u_component_of_wind_10m[["2020–2024"]] - u_component_of_wind_10m[["1980–1984"]]
+
+# Rango simétrico alrededor de 0 m s⁻¹
+rango_u <- max(abs(minmax(u_diff)))
+
+escala_u_diff <- tm_scale_continuous(
+  limits       = c(-rango_u, rango_u),
+  values       = "-PuOr",   # naranja = disminución oeste-→este, púrpura = aumento oeste-→este
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(u_diff) +
+  tm_raster(
+    col.scale  = escala_u_diff,
+    col.legend = tm_legend(title = "Δ u (m s⁻¹)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Componente v (norte-sur) del viento a 10 m
+
+```{r}
+#| label: mapa-componente-v-viento
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(v_component_of_wind_10m) +
+  tm_raster(
+    palette = paleta_v_component_of_wind_10m,
+    style   = "cont",
+    title   = "m s⁻¹"
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-componente_v-viento-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# -------------------------------------------
+# Diferencia del componente v (m s⁻¹)
+# (2020–2024) – (1980–1984)
+# -------------------------------------------
+v_diff <- v_component_of_wind_10m[["2020–2024"]] - v_component_of_wind_10m[["1980–1984"]]
+
+# Rango simétrico alrededor de 0 m s⁻¹
+rango_v <- max(abs(minmax(v_diff)))
+
+escala_v_diff <- tm_scale_continuous(
+  limits       = c(-rango_v, rango_v),
+  values       = "-PuOr",   # naranja = disminución sur-→norte, púrpura = aumento sur-→norte
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(v_diff) +
+  tm_raster(
+    col.scale  = escala_v_diff,
+    col.legend = tm_legend(title = "Δ v (m s⁻¹)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Velocidad del viento a 10 m
+
+```{r}
+#| label: mapa-velocidad-viento
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(wind_speed_10m) +
+  tm_raster(
+    palette = paleta_wind_speed_10m,
+    style   = "cont",
+    title   = "kmh"
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-velocidad_viento-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# -------------------------------------------
+# Diferencia de velocidad del viento (km / h)
+# (2020–2024) – (1980–1984)
+# -------------------------------------------
+speed_diff <- wind_speed_10m[["wind_speed_kmh_2020-2024"]] - wind_speed_10m[["wind_speed_kmh_1980-1984"]]
+
+# Rango simétrico alrededor de 0
+rango_speed <- max(abs(minmax(speed_diff)))
+
+escala_speed_diff <- tm_scale_continuous(
+  limits       = c(-rango_speed, rango_speed),
+  values       = "-BrBG",   # marrón = disminución, azul-verde = aumento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(speed_diff) +
+  tm_raster(
+    col.scale  = escala_speed_diff,
+    col.legend = tm_legend(title = "Δ Velocidad del viento (km/h)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Dirección del viento (desde) a 10 m
+
+```{r}
+#| label: mapa-direccion-viento-desde
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(wind_dir_from_10m) +
+  tm_raster(
+    palette = paleta_wind_dir_from_10m,
+    style   = "cont",
+    title   = "grados"
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-direccion_viento_desde-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# -------------------------------------------
+# Diferencia de dirección del viento (grados)
+# (2020–2024) – (1980–1984)
+# -------------------------------------------
+dir_wind_from_diff <- wind_dir_from_10m[["wind_dir_from_2020-2024"]] - wind_dir_from_10m[["wind_dir_from_1980-1984"]]
+
+# Rango simétrico alrededor de 0
+rango_dir_wind_from <- max(abs(minmax(dir_wind_from_diff)))
+
+escala_dir_wind_from_diff <- tm_scale_continuous(
+  limits       = c(-rango_speed, rango_speed),
+  values       = "-BrBG",   # marrón = disminución, azul-verde = aumento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(dir_wind_from_diff) +
+  tm_raster(
+    col.scale  = escala_dir_wind_from_diff,
+    col.legend = tm_legend(title = "Δ Dirección del viento (desde) (grados)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Dirección del viento (hacia) a 10 m
+
+```{r}
+#| label: mapa-direccion-viento-hacia
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(wind_dir_to_10m) +
+  tm_raster(
+    palette = paleta_wind_dir_to_10m,
+    style   = "cont",
+    title   = "grados"
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-direccion_viento_hacia-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# -------------------------------------------
+# Diferencia de dirección del viento (grados)
+# (2020–2024) – (1980–1984)
+# -------------------------------------------
+dir_wind_to_diff <- wind_dir_to_10m[["wind_dir_to_2020-2024"]] - wind_dir_to_10m[["wind_dir_to_1980-1984"]]
+
+# Rango simétrico alrededor de 0
+rango_dir_wind_to <- max(abs(minmax(dir_wind_to_diff)))
+
+escala_dir_wind_to_diff <- tm_scale_continuous(
+  limits       = c(-rango_speed, rango_speed),
+  values       = "-BrBG",   # marrón = disminución, azul-verde = aumento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(dir_wind_to_diff) +
+  tm_raster(
+    col.scale  = escala_dir_wind_to_diff,
+    col.legend = tm_legend(title = "Δ Dirección del viento (hacia) (grados)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Índice de área foliar (LAI) – vegetación alta
+
+```{r}
+#| label: mapa-lai-vegetacion-alta
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(lai_high_vegetation) +
+  tm_raster(
+    palette = paleta_lai_high_vegetation,
+    style   = "cont",
+    title   = "LAI (m²/m²)"
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-lai_vegetacion_alta-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+lai_high_diff <- lai_high_vegetation[["2020–2024"]] -
+                 lai_high_vegetation[["1980–1984"]]
+
+val_range      <- terra::global(lai_high_diff, fun = "range", na.rm = TRUE)[1, ]
+rango_lai_high <- max(abs(val_range))
+if (rango_lai_high < 1e-6) rango_lai_high <- 1e-6   # evita rango 0
+
+escala_lai_high_diff <- tm_scale_continuous(
+  limits       = c(-rango_lai_high, rango_lai_high),
+  values       = "-RdYlGn",
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(lai_high_diff) +
+  tm_raster(
+    col.scale  = escala_lai_high_diff,
+    col.legend = tm_legend(title = "Δ LAI (m²/m²)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+## Índice de área foliar (LAI) – vegetación baja
+
+```{r}
+#| label: mapa-lai-vegetacion-baja
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+tmap_mode("plot")
+
+tm_shape(lai_low_vegetation) +
+  tm_raster(
+    palette      = paleta_lai_low_vegetation,
+    style        = "cont",
+    # values.range = c(0, 3),
+    title        = "LAI (m²/m²)"
+  ) +
+  tm_facets(ncol = 3) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+**Diferencia (2020–2024) – (1980–1984)**
+
+```{r}
+#| label: mapa-diferencia-lai_vegetacion_baja-1980_1984_vs_2020_2024
+#| warning: false
+#| message: false
+#| code-fold: true
+#| fig-height: 6
+#| fig-width: 6
+
+# --------------------------------------------------------
+# Diferencia de LAI – vegetación baja (m² m⁻²)
+# (2020–2024) – (1980–1984)
+# --------------------------------------------------------
+lai_low_diff <- lai_low_vegetation[["2020–2024"]] -
+                lai_low_vegetation[["1980–1984"]]
+
+# Obtener el rango real de valores
+val_range     <- terra::global(lai_low_diff, fun = "range", na.rm = TRUE)[1, ]
+rango_lai_low <- max(abs(val_range))
+
+# Evitar rango 0 (o muy pequeño) que provoca 'breaks' duplicados
+if (rango_lai_low < 1e-6) rango_lai_low <- 1e-6
+
+escala_lai_low_diff <- tm_scale_continuous(
+  limits       = c(-rango_lai_low, rango_lai_low),
+  values       = "-RdYlGn",   # rojo = pérdida, verde = aumento
+  midpoint     = 0,
+  values.range = c(0, 1)
+)
+
+tmap_mode("plot")
+
+tm_shape(lai_low_diff) +
+  tm_raster(
+    col.scale  = escala_lai_low_diff,
+    col.legend = tm_legend(title = "Δ LAI (m²/m²)")
+  ) +
+  tm_layout(
+    outer.margins = 0,
+    inner.margins = 0,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+```
+
+# Anomalías climáticas
+
+```{r}
+label_base   <- "1961-1990"
+label_recent <- "1991-2024"
+
+# 1) Leer anomalía de climatologías (12 bandas) y promediar meses
+r12   <- rast("2m_temperature_ca_anom_climatologia_mensual_1991-2024_vs_1961-1990.tif")
+rmean <- mean(r12)  # promedio de los 12 meses (queda 1 banda)
+
+# 2) Promedio espacial → un solo valor (°C)
+val <- as.numeric(global(rmean, "mean", na.rm = TRUE))
+
+# 3) Barra única
+df <- tibble(periodo = sprintf("%s vs %s", label_recent, label_base), anom = val)
+ggplot(df, aes(periodo, anom)) +
+  geom_col(width = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_text(aes(label = sprintf("%.2f °C", anom)), vjust = -0.5) +
+  labs(title = "Anomalía de temperatura a 2 m",
+       subtitle = "Promedio mensual y espacial: RECENT − BASE",
+       x = NULL, y = "Anomalía media (°C)") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+label_base   <- "1961-1990"
+label_recent <- "1991-2024"
+
+r <- rast("leaf_area_index_low_vegetation_ca_anom_mensual_1991-2024_rel1961-1990.tif")
+
+# Promedio espacial por capa (una por YYYY-MM)
+# m_sp <- as.numeric(global(r, "mean", na.rm = TRUE))
+m_sp <- drop(terra::global(r, mean, na.rm = TRUE)[, 1])
+fechas <- as.Date(paste0(names(r), "-01"))
+df <- tibble(date = fechas,
+             year = year(fechas),
+             month = month(fechas),
+             anom = m_sp)
+
+mes_lab <- c("Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic")
+
+# Resumen por mes: media y rango 5–95% interanual
+sum_month <- df %>%
+  group_by(month) %>%
+  summarise(mean_anom = mean(anom, na.rm=TRUE),
+            q05 = quantile(anom, 0.05, na.rm=TRUE),
+            q95 = quantile(anom, 0.95, na.rm=TRUE),
+            .groups = "drop") %>%
+  mutate(month_f = factor(month, levels = 1:12, labels = mes_lab))
+
+ggplot(sum_month, aes(month_f, mean_anom)) +
+  geom_col(width = 0.7) +
+  geom_errorbar(aes(ymin = q05, ymax = q95), width = 0.25, linewidth = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Anomalía de temperatura a 2 m por mes",
+       subtitle = paste0("Media espacial (1991–2024) y rango interanual 5–95% — ref. ", label_base),
+       x = NULL, y = "Anomalía (°C)") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+season_df <- df %>%
+  mutate(season = case_when(
+           month %in% c(12,1,2) ~ "DJF",
+           month %in% 3:5       ~ "MAM",
+           month %in% 6:8       ~ "JJA",
+           TRUE                 ~ "SON"
+         ),
+         season_year = if_else(month == 12, year + 1L, year)) %>%   # DJF asigna dic a año+1
+  group_by(season_year, season) %>%
+  summarise(seas_mean = mean(anom, na.rm=TRUE), .groups = "drop")
+
+sum_season <- season_df %>%
+  group_by(season) %>%
+  summarise(mean_anom = mean(seas_mean, na.rm=TRUE),
+            q05 = quantile(seas_mean, 0.05, na.rm=TRUE),
+            q95 = quantile(seas_mean, 0.95, na.rm=TRUE),
+            .groups = "drop") %>%
+  mutate(season = factor(season, levels = c("DJF","MAM","JJA","SON")))
+
+ggplot(sum_season, aes(season, mean_anom)) +
+  geom_col(width = 0.6) +
+  geom_errorbar(aes(ymin = q05, ymax = q95), width = 0.25, linewidth = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Anomalía estacional de temperatura a 2 m",
+       subtitle = paste0("Media por estación (1991–2024) — ref. ", label_base),
+       x = NULL, y = "Anomalía (°C)") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+df_hov <- df %>%
+  mutate(month_f = factor(month, levels = 1:12, labels = mes_lab))
+
+M <- max(abs(range(df_hov$anom, na.rm=TRUE)))  # escala simétrica alrededor de 0
+
+ggplot(df_hov, aes(x = month_f, y = year, fill = anom)) +
+  geom_tile() +
+  scale_fill_gradient2(name = "Anom (°C)", limits = c(-M, M), midpoint = 0) +
+  labs(title = "Anomalía mensual (promedio espacial) — 2 m",
+       subtitle = paste0(label_recent, " relativo a ", label_base),
+       x = "Mes", y = "Año") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+library(stars)
+library(tmap)
+library(rnaturalearth)
+library(sf)
+
+r12   <- rast("leaf_area_index_low_vegetation_ca_anom_climatologia_mensual_1991-2024_vs_1961-1990.tif")
+r_mean <- mean(r12)  # 1 banda: media de las 12 anomalías mensuales
+
+us_states  <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf")
+california <- sf::st_transform(us_states[us_states$name == "California", ], 4326)
+
+brks <- {
+  gmin <- global(r12, "min", na.rm = TRUE)[1,1]
+  gmax <- global(r12, "max", na.rm = TRUE)[1,1]
+  pretty(c(-max(abs(c(gmin,gmax))), max(abs(c(gmin,gmax)))), n = 9)
+}
+
+tmap_mode("plot")
+tm_shape(st_as_stars(r_mean)) +
+  tm_raster(style = "fixed", breaks = brks, palette = "-RdBu", title = "Anom media (°C)") +
+  tm_shape(california) + tm_borders(lwd = 0.8) +
+  tm_layout(title = paste0("2m_temperature — Media de anomalías mensuales: ", label_recent, " vs ", label_base),
+            legend.outside = TRUE, frame = FALSE)
+
+```
+
