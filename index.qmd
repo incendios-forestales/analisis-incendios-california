@@ -154,10 +154,6 @@ incendios_por_anio_mes <-
 
 # Temperatura del aire a 2m
 temperature_2m_12m <- rast("datos/2m_temperature_ca_promedio_1960-2024-12m.tif")
-# Temperatura de la superficie del suelo
-skin_temperature_12m <- rast("datos/skin_temperature_ca_promedio_1960-2024-12m.tif")
-# Temperatura del suelo en el nivel 1 (0 - 7 cm)
-soil_temperature_level_1_12m <- rast("datos/soil_temperature_level_1_ca_promedio_1960-2024-12m.tif")
 # Precipitación total
 total_precipitation_12m <- rast("datos/total_precipitation_ca_promedio_1960-2024-12m.tif")
 # Velocidad del viento a 10 m
@@ -183,8 +179,6 @@ nombres_capas_variables_climaticas <- c(
 )
 
 names(temperature_2m_12m)           <- nombres_capas_variables_climaticas
-names(skin_temperature_12m)         <- nombres_capas_variables_climaticas
-names(soil_temperature_level_1_12m) <- nombres_capas_variables_climaticas
 names(total_precipitation_12m)      <- nombres_capas_variables_climaticas
 names(wind_speed_10m_12m)           <- nombres_capas_variables_climaticas
 names(lai_low_vegetation_12m)       <- nombres_capas_variables_climaticas
@@ -193,8 +187,6 @@ names(lai_low_vegetation_12m)       <- nombres_capas_variables_climaticas
 yrs <- as.character(1961:2024)
 
 temperature_2m_12m           <- temperature_2m_12m[[names(temperature_2m_12m)                     %in% yrs]]
-skin_temperature_12m         <- skin_temperature_12m[[names(skin_temperature_12m)                 %in% yrs]]
-soil_temperature_level_1_12m <- soil_temperature_level_1_12m[[names(soil_temperature_level_1_12m) %in% yrs]]
 total_precipitation_12m      <- total_precipitation_12m[[names(total_precipitation_12m)           %in% yrs]]
 wind_speed_10m_12m           <- wind_speed_10m_12m[[names(wind_speed_10m_12m)                     %in% yrs]]
 lai_low_vegetation_12m       <- lai_low_vegetation_12m[[names(lai_low_vegetation_12m)             %in% yrs]]
@@ -287,7 +279,9 @@ En mapa anterior muestra los polígonos de los incendios coloreados según el pr
 
 La “franja vacía” en el centro corresponde al Valle Central (Sacramento–San Joaquín). Se aprecian pocos incendios debido a que ahí predomina la agricultura intensiva y el uso urbano del suelo. Hay poco combustible continuo, los campos irrigados y barbechos actúan como cortafuegos y el mosaico de parcelas limita la propagación, por lo que muchos incendios se detienen en viñedos y otros cultivos de frutas (<https://ucanr.edu/program/uc-anr-fire-network/fire-protection-crops-vineyards-and-orchards>). Además, los polígonos publicados por CAL FIRE suelen ser de incendios forestales/agrícolas “wildland”; así que muchas quemas agrícolas no se cartografían como polígonos de gran incendio, por lo que el valle podría estar sub-representado.
 
-## Cantidad de incendios y área quemada por año
+## Incendios y área quemada por año
+
+### Cantidad de incendios y área quemada por año
 
 ```{r}
 #| label: grafico-cantidad-incendios-area-quemada
@@ -373,6 +367,134 @@ fig
 ```
 
 Tanto la cantidad de incendios como el área quemada anualmente muestran tendencias crecientes. El aumento es más marcado desde mediados de los 2000. El área quemada es muy volátil: años relativamente tranquilos se alternan con picos extremos (especialmente ~2018–2021, con 2020 como caso atípico o *outlier* histórico). Esto sugiere que unos pocos megaincendios podrían explicar gran parte del total anual. Hay años con muchos incendios pero área moderada, y otros con menos eventos pero áreas enormes. Es decir, el tamaño promedio de los incendios cambia con las condiciones (sequía, olas de calor, viento), no solo con el conteo.
+
+### Diferencias entre períodos
+
+```{r}
+#| label: comparacion-incendios-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Resumen para dos periodos
+tabla_periodos_n <-
+  incendios_por_anio |>
+  dplyr::mutate(periodo = dplyr::if_else(anio <= 1990, "1961–1990", "1991–2024")) |>
+  dplyr::group_by(periodo) |>
+  dplyr::summarise(
+    n_promedio = mean(n, na.rm = TRUE),
+    n_total    = sum(n, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(periodo = factor(periodo, levels = c("1961–1990", "1991–2024"))) |>
+  dplyr::arrange(periodo)
+
+# Delta absoluto y relativo (periodo2 - periodo1)
+a_n     <- tabla_periodos_n$n_promedio[1]
+b_n     <- tabla_periodos_n$n_promedio[2]
+delta_n <- b_n - a_n
+pct_n   <- if (is.na(a_n) || a_n == 0) NA_real_ else delta_n / a_n
+
+# Gráfico: cantidad de incendios (promedio anual por periodo)
+plotly::plot_ly(
+  data = tabla_periodos_n,
+  x    = ~periodo,
+  y    = ~n_promedio,
+  type = "bar",
+  text = ~scales::comma(round(n_promedio, 0)),
+  textposition = "outside",
+  hovertemplate = paste(
+    "<b>%{x}</b><br>",
+    "Incendios por año: %{y:,}<br>",
+    "Incendios totales: %{customdata:,}<extra></extra>"
+  ),
+  customdata = ~n_total,
+  marker = list(color = col["cantidad_incendios"])
+) |>
+plotly::layout(
+  title = "Cantidad de incendios por periodo (promedio anual)",
+  yaxis = list(title = "Incendios por año", tickformat = ",.0f"),
+  xaxis = list(title = ""),
+  showlegend = FALSE,
+  margin = list(t = 80, r = 30, b = 40, l = 70),
+  annotations = list(
+    list(
+      x = 0.5, y = 1.12, xref = "paper", yref = "paper",
+      text = paste0(
+        "Δ = ", scales::comma(round(delta_n, 1)),
+        if (!is.na(pct_n)) paste0(" (", scales::percent(pct_n, accuracy = 0.1), ")") else ""
+      ),
+      showarrow = FALSE, font = list(size = 12)
+    )
+  )
+) |>
+plotly::config(locale = "es", displayModeBar = FALSE)
+```
+
+El gráfico muestra un aumento claro del número medio de incendios por año al pasar de 1961–1990 a 1991–2024. Esto sugiere más igniciones y/o mayor detección y reporte en décadas recientes.
+
+```{r}
+#| label: comparacion-area-quemada-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Resumen para dos periodos
+tabla_periodos_area <-
+  incendios_por_anio |>
+  dplyr::mutate(periodo = dplyr::if_else(anio <= 1990, "1961–1990", "1991–2024")) |>
+  dplyr::group_by(periodo) |>
+  dplyr::summarise(
+    area_promedio_ha = mean(area_quemada_total, na.rm = TRUE),
+    area_total_ha    = sum(area_quemada_total, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(periodo = factor(periodo, levels = c("1961–1990", "1991–2024"))) |>
+  dplyr::arrange(periodo)
+
+# Delta absoluto y relativo (periodo2 - periodo1)
+a_area     <- tabla_periodos_area$area_promedio_ha[1]
+b_area     <- tabla_periodos_area$area_promedio_ha[2]
+delta_area <- b_area - a_area
+pct_area   <- if (is.na(a_area) || a_area == 0) NA_real_ else delta_area / a_area
+
+# Gráfico: área quemada (promedio anual por periodo)
+plotly::plot_ly(
+  data = tabla_periodos_area,
+  x    = ~periodo,
+  y    = ~area_promedio_ha,
+  type = "bar",
+  text = ~scales::comma(round(area_promedio_ha, 0)),
+  textposition = "outside",
+  hovertemplate = paste(
+    "<b>%{x}</b><br>",
+    "Hectáreas por año: %{y:,}<br>",
+    "Hectáreas totales: %{customdata:,}<extra></extra>"
+  ),
+  customdata = ~area_total_ha,
+  marker = list(color = col["area_quemada"])
+) |>
+plotly::layout(
+  title = "Área quemada por periodo (promedio anual)",
+  yaxis = list(title = "Hectáreas por año", tickformat = ",.0f"),
+  xaxis = list(title = ""),
+  showlegend = FALSE,
+  margin = list(t = 80, r = 30, b = 40, l = 70),
+  annotations = list(
+    list(
+      x = 0.5, y = 1.12, xref = "paper", yref = "paper",
+      text = paste0(
+        "Δ = ", scales::comma(round(delta_area, 1)), " ha",
+        if (!is.na(pct_area)) paste0(" (", scales::percent(pct_area, accuracy = 0.1), ")") else ""
+      ),
+      showarrow = FALSE, font = list(size = 12)
+    )
+  )
+) |>
+plotly::config(locale = "es", displayModeBar = FALSE)
+```
+
+El incremento del promedio anual de hectáreas quemadas entre 1961–1990 y 1991–2024 es más marcado que el del conteo de incendios, lo que implica que el tamaño medio de los incendios ha crecido.
 
 ## Relación entre temperatura y área quemada
 
