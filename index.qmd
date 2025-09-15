@@ -1017,6 +1017,7 @@ El gráfico anterior muestra que a mayor precipitación, hay menos área quemada
 #| warning: false
 #| message: false
 #| results: "hide"
+#| echo: false
 
 # 0) Creación de objetos sf por condados. 
 
@@ -1234,9 +1235,9 @@ tm_shape(ca_unificado, name = "Población vulnerable") +
     legend.format = list(suffix = " %", digits = 1),
     popup.vars = c(
       "Condado" = "NAME",
-      "Porcentaje de población vulnerable" = "pct"
+      "Población vulnerable" = "pct"
     ),
-    title = "Porcentaje de población vulnerable"
+    title = "Población vulnerable"
   ) +
   tm_borders(col = "white", lwd = 0.5)
 ```
