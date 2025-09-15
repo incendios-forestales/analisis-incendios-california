@@ -1,7 +1,7 @@
 ---
 title: "Análisis de datos de incendios forestales en California"
 author: "Mariela Alvarado, Manuel Vargas"
-date: "2025-09-12"
+date: "2025-09-14"
 format: html
 toc: true
 lang: es
@@ -10,9 +10,21 @@ theme: cosmo
 
 # Introducción
 
-Los incendios forestales representan una de las amenazas medioambientales más críticas del siglo XXI. Además de destruir ecosistemas y biodiversidad, estos eventos comprometen la salud pública, la seguridad de las comunidades y la estabilidad económica, lo que evidencia la urgente necesidad de herramientas analíticas que permitan comprender y mitigar su impacto. Mediante técnicas de procesamiento y análisis espacial de datos geográficos, el presente estudio se enfoca en la incidencia de incendios forestales como una manifestación del cambio climático. A través del lenguaje de programación R, se desarrolló un sistema de visualización e interpretación geoespacial que integra datos vectoriales y ráster. El análisis se centró en el estado de California, Estados Unidos, una región particularmente vulnerable a eventos extremos asociados al calentamiento global.
+Los incendios forestales representan una de las amenazas medioambientales más críticas del siglo XXI. Además de destruir ecosistemas y biodiversidad, estos eventos comprometen la salud pública, la seguridad de las comunidades y la estabilidad económica, lo que evidencia la urgente necesidad de herramientas analíticas que permitan comprender y mitigar su impacto.
 
-Este documento presenta un análisis exploratorio de los datos de incendios forestales facilitados por el [Departamento de Silvicultura y Protección contra Incendios de California (CAL FIRE)](https://www.fire.ca.gov/), a los cuales se les unieron datos de temperatura provenientes del [Reanálisis atmosférico de quinta generación del ECMWF (ERA5)](https://cds.climate.copernicus.eu/).
+Mediante técnicas de procesamiento y análisis espacial de datos geográficos, el presente estudio se enfoca en la incidencia de incendios forestales como una manifestación del cambio climático. A través del lenguaje de programación R, se desarrolló un sistema de visualización e interpretación geoespacial que integra datos vectoriales y ráster. El análisis se realizó para el estado de California, Estados Unidos, una región particularmente vulnerable a eventos extremos asociados al calentamiento global.
+
+# Metodología
+
+Para llevar a cabo el estudio se utilizaron dos tipos de datos: de incendios forestales y climáticos.
+
+Los datos de incendios forestales se obtuvieron a través del [Departamento de Silvicultura y Protección contra Incendios de California (CAL FIRE)](https://www.fire.ca.gov/), el cual publica registros de incendios ocurridos desde 1878 hasta la actualidad. Se desarrolló un programa que accedió la interfaz de programación de aplicaciones (API) de CAL FIRE y para cada incendio se descargaron más de 20 variables asociadas, entre las que pueden mencionarse su nombre, causa, área, fecha de emisión de la alarma, fecha de contención y geometría de polígono.
+
+Por su parte, los datos climáticos provienen del [Centro Europeo de Previsiones Meteorológicas a Medio Plazo (ECMWF)](https://www.ecmwf.int/) y su [Reanálisis Atmosférico de Quinta Generación (ERA5)](https://cds.climate.copernicus.eu/). ERA5 integra observaciones y un modelo numérico para reconstruir histórica y continuamente el estado de la atmósfera y de la superficie terrestre. Combina millones de observaciones (estaciones, radiosondeos, satélites, boyas, etc.) para generar, en una malla regular, series temporales homogéneas de muchas variables atmosféricas y de superficie como temperatura, precipitación, viento, humedad, radiación, presión y oleaje. Cubre desde 1940 hasta el presente y cuenta con una resolución espacial de ~0.25° (≈31 km). En este trabajo se utilizó la versión enfocada en tierra, denominada ERA5-Land, con ~0.1° (≈9 km) de resolución y cobertura desde 1950. Estos datos se descargaron mediante un programa que accede el API de ERA5. De esta manera, las diferentes variables climáticas fueron asociadas a los sitios de los incendios.
+
+El estudio se realizó para el periodo entre 1961 y 2024. El rango posterior a 1990 —en particular 1991–2020— se usa como "normal climatológica vigente" para el monitoreo operativo del clima actual. La escogencia de 1961–1990 proviene de las Normales Climatológicas de la OMM (WMO), que definen promedios de 30 años. La OMM mantiene 1961–1990 como referencia estándar para la evaluación del cambio climático a largo plazo. Además, representa el clima “pre-aceleración” del calentamiento global y está ampliamente documentado.
+
+Los programas para acceder las API de CAL FIRE y ERA5 fueron desarrollados en el lenguaje de programación [R](https://www.r-project.org/). Los documentos con visualizaciones como tablas, gráficos estadísticos y mapas interactivos fueron desarrollados con R y con el sistema de publicación técnica y científica [Quarto](https://quarto.org/).
 
 ```{r}
 #| label: cargar-bibliotecas
@@ -52,7 +64,7 @@ lim_x <- range(cortes_anios)
 #| echo: false
 
 # Leer archivo
-incendios <- read_csv("datos/incendios_ca_2m_temperature_mean_ca_diaria_1960-2024.csv")
+incendios <- read_csv("datos/incendios_ca_combinado_1960-2024.csv")
 
 # Eliminar incendios que no tienen ALARM_DATE
 incendios <-
@@ -590,3 +602,256 @@ fig_sig
 ```
 
 El gráfico anterior muestra que a mayor temperatura media, hay más área quemada. La línea resume esa tendencia. Por cada grado adicional de temperatura, se queman en promedio unas 223 mil hectáreas más. Incluso siendo conservadores, el rango probable va de 50 mil a 396 mil hectáreas. El resultado es estadísticamente significativo y la temperatura por sí sola explica alrededor de un 36 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
+
+# Total de precipitación por año
+
+```{r}
+#| label: grafico-total-precipitation-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(total_precipitation_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(total_precipitation_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(total_precipitation_12m))
+
+precipitacion_total_anual <- 
+  tibble(anio = anios, precipitacion = vals) |> 
+  arrange(anio)
+
+g <- ggplot(
+  precipitacion_total_anual,
+  aes(x = anio, y = precipitacion, group = 1, 
+      text = paste0("Año: ", anio,
+                    "<br>Precipitación total anual: ", scales::number(precipitacion, accuracy = 0.1), " mm"))
+  ) +
+  geom_line(color = "blue", linewidth = 1) +
+  geom_point(color = "blue", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = "gray30") +
+  labs(x = "Año", y = "Precipitación total (mm)") +
+  scale_x_continuous(breaks = cortes_anios, limits = lim_x, minor_breaks = NULL) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+# Evolución anual del área quemada y la precipitación
+
+```{r}
+#| label: grafico-area-y-prec-plotly
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Unir series ya creadas
+serie_at <-
+  dplyr::full_join(
+    dplyr::select(incendios_por_anio, anio, area_quemada_total),
+    dplyr::select(precipitacion_total_anual, anio, precipitacion),
+    by = "anio"
+  ) |>
+  dplyr::arrange(anio) |>
+  dplyr::mutate(
+    tt_area = paste0(
+      "Año: ", anio,
+      "<br>Área quemada: ", scales::comma(area_quemada_total), " ha"
+    ),
+    tt_prec = paste0(
+      "Año: ", anio,
+      "<br>Precipitación: ", scales::number(precipitacion, accuracy = 0.1), "mm"
+    )
+  )
+
+# Tendencias lineales (como en los gráficos previos)
+df_area <- tidyr::drop_na(serie_at, area_quemada_total)
+df_prec <- tidyr::drop_na(serie_at, precipitacion)
+pred_area <- tibble::tibble(
+  anio = df_area$anio,
+  yhat = predict(lm(area_quemada_total ~ anio, data = df_area), newdata = df_area)
+)
+pred_prec <- tibble::tibble(
+  anio = df_temp$anio,
+  yhat = predict(lm(precipitacion ~ anio, data = df_prec), newdata = df_prec)
+)
+
+# Plotly con doble eje (izq: área, der: precipitación)
+fig <- plotly::plot_ly() |>
+  plotly::add_lines(
+    data = serie_at,
+    x = ~anio, y = ~area_quemada_total,
+    name = "Área quemada (ha)",
+    hovertemplate = ~tt_area,
+    line = list(color = "red", width = 2)
+  ) |>
+  plotly::add_lines(
+    data = serie_at,
+    x = ~anio, y = ~precipitacion,
+    name = "Precipitación total (mm)",
+    hovertemplate = ~tt_prec,
+    line = list(color = "steelblue", width = 2),
+    yaxis = "y2"
+  ) |>
+  # Tendencias (líneas punteadas)
+  plotly::add_lines(
+    data = pred_area, x = ~anio, y = ~yhat,
+    showlegend = FALSE, line = list(dash = "dash", width = 1, color = "red")
+  ) |>
+  plotly::add_lines(
+    data = pred_prec, x = ~anio, y = ~yhat,
+    showlegend = FALSE, line = list(dash = "dash", width = 1, color = "steelblue"),
+    yaxis = "y2"
+  ) |>
+  plotly::layout(
+    xaxis = list(
+      title = "Año",
+      tickvals = cortes_anios,
+      range = c(min(lim_x), max(lim_x))
+    ),
+    yaxis = list(
+      title = "Área quemada (ha)",
+      tickformat = ",.0f"
+    ),
+    yaxis2 = list(
+      title = list(text = "Precipitación total (mm)", standoff = 16),
+      overlaying = "y",
+      side = "right",
+      tickformat = ".1f",
+      automargin = TRUE
+    ),
+    legend = list(orientation = "h", x = 0, y = 1.15),
+    margin = list(t = 90, r = 80, b = 60, l = 60)
+  ) |>
+  plotly::config(locale = "es", displayModeBar = TRUE)
+
+fig
+```
+
+# Relación lineal entre precipitación y área quemada
+
+```{r}
+#| label: significacion-area-vs-precipitacion
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Paquetes necesarios para errores robustos
+suppressWarnings({
+  library(lmtest)
+  library(sandwich)
+  library(knitr)
+  library(kableExtra)
+})
+
+# --- Unir y alistar datos ---
+df <- dplyr::inner_join(
+  dplyr::select(incendios_por_anio, anio, area_quemada_total),
+  dplyr::select(precipitacion_total_anual, anio, precipitacion),
+  by = "anio"
+) |>
+  dplyr::arrange(anio) |>
+  tidyr::drop_na()
+
+# --- Correlaciones ---
+pear <- cor.test(df$area_quemada_total, df$precipitacion, method = "pearson")
+spear <- cor.test(df$area_quemada_total, df$precipitacion, method = "spearman")
+
+# --- Regresión lineal con SE robustos Newey-West (maneja autocorrelación anual) ---
+mod  <- lm(area_quemada_total ~ precipitacion, data = df)
+
+# lag sugerido para NW (regla común)
+nw_lag <- max(1L, floor(4 * (nrow(df) / 100)^(2/9)))
+ct   <- lmtest::coeftest(mod, vcov = sandwich::NeweyWest(mod, lag = nw_lag, prewhite = TRUE, adjust = TRUE))
+beta <- unname(ct["precipitacion", "Estimate"])
+se_r <- unname(ct["precipitacion", "Std. Error"])
+pval <- unname(ct["precipitacion", "Pr(>|t|)"])
+r2   <- summary(mod)$r.squared
+
+# IC 95% (robusto) para la pendiente
+z    <- 1.96
+ci_l <- beta - z * se_r
+ci_u <- beta + z * se_r
+
+# --- Tabla breve de resultados ---
+resumen <- tibble::tibble(
+  indicador = c("Correlación de Pearson (r)", "Correlación de Spearman (ρ)",
+                "Pendiente β (área ~ temp)", "IC95% β", "p-valor (β)", "R² (lineal)"),
+  valor     = c(
+    sprintf("%.3f (p=%.8f)", pear$estimate, pear$p.value),
+    sprintf("%.3f (p=%.8f)", spear$estimate, spear$p.value),
+    sprintf("%.3f", beta),
+    sprintf("[%.3f, %.3f]", ci_l, ci_u),
+    sprintf("%.4g", pval),
+    sprintf("%.3f", r2)
+  )
+)
+
+knitr::kable(
+  resumen,
+  format   = "html",
+  col.names = c("Indicador", "Valor"),
+  align    = c("l", "r"),
+  caption  = sprintf("Resultados (n = %d; lag Newey–West = %d)", nrow(df), nw_lag)
+) |>
+  kableExtra::kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position   = "center"
+  )
+```
+
+```{r}
+#| label: scatter-significacion-area-vs-precipitacion
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- Scatter con recta de ajuste y anotación de R² y p ---
+# datos para la recta
+pred_line <- tibble::tibble(
+  precipitacion = seq(min(df$precipitacion, na.rm = TRUE),
+                    max(df$precipitacion, na.rm = TRUE), length.out = 100)
+)
+pred_line$area_fit <- predict(mod, newdata = pred_line)
+
+fig_sig <- plotly::plot_ly() |>
+  plotly::add_markers(
+    data = df,
+    x = ~precipitacion, y = ~area_quemada_total,
+    name = "Datos",
+    hovertemplate = paste0(
+      "Año: %{customdata}<br>",
+      "Precipitación: %{x:.1f} mm<br>",
+      "Área: %{y:,.0f} ha<extra></extra>"
+    ),
+    customdata = df$anio
+  ) |>
+  plotly::add_lines(
+    data = pred_line,
+    x = ~precipitacion, y = ~area_fit,
+    name = "Ajuste lineal",
+    line = list(dash = "solid", width = 2)
+  ) |>
+  plotly::layout(
+    xaxis  = list(title = "Precipitación total (mm)", tickformat = ".1f"),
+    yaxis  = list(title = "Área quemada (ha)", tickformat = ",.0f"),
+    legend = list(orientation = "h", x = 0, y = 1.15),
+    margin = list(t = 90, r = 40, b = 60, l = 60),
+    annotations = list(
+      list(
+        x = 0.02, y = 0.98, xref = "paper", yref = "paper",
+        text = sprintf("R² = %.3f<br>β = %.3f (IC95%% %.3f, %.3f)<br>p = %.4g",
+                       r2, beta, ci_l, ci_u, pval),
+        showarrow = FALSE, align = "left", bgcolor = "rgba(255,255,255,0.8)",
+        bordercolor = "rgba(0,0,0,0.2)", borderwidth = 1, borderpad = 4
+      )
+    )
+  ) |>
+  plotly::config(locale = "es", displayModeBar = TRUE)
+
+fig_sig
+```
