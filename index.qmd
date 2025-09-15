@@ -48,6 +48,7 @@ library(terra)
 library(tmap)
 library(rnaturalearth)
 library(RColorBrewer)
+library(tidycensus)
 ```
 
 ```{r}
@@ -1007,3 +1008,235 @@ fig_sig
 ```
 
 El gráfico anterior muestra que a mayor precipitación, hay menos área quemada. Por cada milímetro adicional de precipitación, se queman en promedio unas 452 hectáreas menos. El rango probable va de 930 hectáreas menos a 25 hectáreas más. El resultado es estadísticamente significativo, pero no tanto como en el caso de la precipitación y el área quemada. La precipitación por sí sola explica alrededor de un 7 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
+
+## Vulnerabilidad
+
+```{r}
+#| label: procesamiento-mapa-vulnerabilidad
+#| code-fold: true
+#| warning: false
+#| message: false
+#| results: "hide"
+
+# 0) Creación de objetos sf por condados. 
+
+#Obtener objeto sf de población total con discapacidad 
+
+ca_dis <- get_acs(
+  geography = "county",
+  variables =  "S1810_C01_001E", 
+  state = "CA",
+  year  = 2023,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+#Obtener objeto sf de población total con un nivel de inglés limitado
+
+ca_limeng <- get_acs(
+  geography = "county",
+  variables =  "S1602_C01_001E", 
+  state = "CA",
+  year  = 2023,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+#Obtener objeto sf de población de 65 años o más 
+
+ca_elderly <- get_acs(
+  geography = "county",
+  variables =  "S0101_C01_030E", 
+  state = "CA",
+  year  = 2023,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+#Obtener objeto sf de población infante (entre 5-14 años)
+
+ca_infant <- get_acs(
+  geography = "county",
+  variables =  "S0101_C01_020E", 
+  state = "CA",
+  year  = 2023,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+
+#Obtener objeto sf de dependencia al medio de tranporte público  
+
+ca_commuting <- get_acs(
+  geography = "county",
+  variables =  "S0801_C01_001E", 
+  state = "CA",
+  year  = 2023,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+#Obtener objeto sf de la población total en estado de pobreza 
+
+ca_pobreza <- get_acs(
+  geography = "county",
+  variables =  "S1701_C03_001E", 
+  state = "CA",
+  year  = 2023,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+#Obtener objeto sf del ingreso promedio de la población total 
+
+ca_inc <- get_acs(
+  geography = "county",
+  variables =  "S1901_C01_001E", 
+  state = "CA",
+  year  = 2023,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+
+#
+# Código adicional para:
+# - Obtener la población de cada condado (crear la columna population)
+# - Obtener el porcentaje que representa cada variable con respecto a la población
+#   (crear la columna pct)
+# - Unificar los objetos sf de variables en uno solo
+# - Generar un mapa del objeto sf unificado
+
+
+# 1) Obtener la población total por condado (ACS 5-year 2023)
+#    Usamos S0101_C01_001E = Total population (tabla de "subject")
+ca_pop <- 
+  get_acs(
+    geography = "county",
+    variables = "S0101_C01_001E",
+    state     = "CA",
+    year      = 2023,
+    survey    = "acs5",
+    geometry  = FALSE   # sin geometría para que el join sea más simple
+  ) |> select(GEOID, population = estimate)
+
+
+# 2) Unir 'population' a cada objeto sf por GEOID
+ca_dis       <- left_join(ca_dis,       ca_pop, by = "GEOID")
+ca_limeng    <- left_join(ca_limeng,    ca_pop, by = "GEOID")
+ca_elderly   <- left_join(ca_elderly,   ca_pop, by = "GEOID")
+ca_infant    <- left_join(ca_infant,    ca_pop, by = "GEOID")
+ca_commuting <- left_join(ca_commuting, ca_pop, by = "GEOID")
+ca_pobreza   <- left_join(ca_pobreza,   ca_pop, by = "GEOID")
+ca_inc       <- left_join(ca_inc,       ca_pop, by = "GEOID")
+
+
+# 3) Crear la columna pct = estimate / population (cuando estimate es una cantidad de personas)
+#    o pct = estimate (cuando estimate es un porcentaje)
+# Se define el modo por defecto y una función para crear 'pct'
+#    - "ratio": pct = estimate / population 
+#    - "copy" : pct = estimate
+pct_mode_default <- "ratio"
+
+add_pct <- function(x, mode = pct_mode_default) {
+  if (!"population" %in% names(x)) stop("Falta la columna 'population'.")
+  if (!"estimate"   %in% names(x)) stop("Falta la columna 'estimate'.")
+  
+  if (mode == "ratio") {
+    # Evitar división por cero o NA en 'population'
+    x$pct <- with(
+      x,
+      ifelse(is.na(population) | population == 0, NA_real_, estimate / population * 100)
+    )
+  } else if (mode == "copy") {
+    x$pct <- x$estimate
+  } else {
+    stop("El modo debe ser 'ratio' o 'copy'.")
+  }
+  x
+}
+
+
+# 4) Crear la columna 'pct' en cada objeto
+ca_dis       <- add_pct(ca_dis)             # ratio
+ca_limeng    <- add_pct(ca_limeng)          # ratio
+ca_elderly   <- add_pct(ca_elderly)         # ratio
+ca_infant    <- add_pct(ca_infant)          # ratio
+ca_commuting <- add_pct(ca_commuting)       # ratio
+ca_pobreza   <- add_pct(ca_pobreza, "copy") # copy (para que conserve el valor de estimate en pct)
+ca_inc       <- add_pct(ca_inc)             # ratio
+
+
+# 5) Elegir cuáles objetos sf incluir en el promedio de 'pct'
+variables_incluir <- c(
+  "ca_dis",
+  "ca_limeng",
+  "ca_elderly",
+  "ca_infant",
+  "ca_commuting", 
+  "ca_pobreza", 
+  "ca_inc"
+)
+
+
+# 6) Unificar en un solo sf:
+#    - Tomamos el primero como base (para NAME y geometry)
+#    - Vamos uniendo (left_join por GEOID) el 'pct' de los demás
+#    - Guardamos cada 'pct' con nombre único: pct_<nombre_objeto>
+stopifnot(length(variables_incluir) >= 1)
+
+primero <- variables_incluir[1]
+base_sf <- get(primero) |>
+  select(GEOID, NAME, geometry, pct) |>
+  rename(!!paste0("pct_", primero) := pct)
+
+# Unir los demás objetos seleccionados
+if (length(variables_incluir) > 1) {
+  for (obj in variables_incluir[-1]) {
+    tmp <- get(obj) |>
+      st_drop_geometry() |>
+      select(GEOID, !!paste0("pct_", obj) := pct)
+    base_sf <- left_join(base_sf, tmp, by = "GEOID")
+  }
+}
+
+
+# 7) Calcular el promedio de 'pct' por condado (ignorando NA) y dejar columnas finales
+pct_cols <- names(base_sf)[startsWith(names(base_sf), "pct_")]
+
+# Forzar a numérico (por si alguna llegó como carácter/factor)
+# base_sf[pct_cols] <- lapply(base_sf[pct_cols], function(v) as.numeric(v))
+
+# Calcular promedio de pct ignorando NA
+base_sf$pct <- rowMeans(as.data.frame(st_drop_geometry(base_sf[pct_cols])), na.rm = TRUE)
+
+ca_unificado <- base_sf |>
+  select(GEOID, NAME, pct, geometry)
+```
+
+```{r}
+#| label: mapa-vulnerabilidad
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# 8) Mapa interactivo
+tmap_mode("view")
+
+tm_shape(ca_unificado, name = "Población vulnerable") +
+  tm_polygons(
+    col = "pct",
+    id  = "NAME",  # nombre del condado en el tooltip
+    palette = "OrRd",
+    style = "quantile",
+    n = 5,
+    alpha = 0.8,
+    legend.format = list(suffix = " %", digits = 1),
+    popup.vars = c(
+      "Condado" = "NAME",
+      "Porcentaje de población vulnerable" = "pct"
+    ),
+    title = "Porcentaje de población vulnerable"
+  ) +
+  tm_borders(col = "white", lwd = 0.5)
+```
