@@ -200,6 +200,21 @@ wind_speed_10m_12m           <- wind_speed_10m_12m[[names(wind_speed_10m_12m)   
 lai_low_vegetation_12m       <- lai_low_vegetation_12m[[names(lai_low_vegetation_12m)             %in% yrs]]
 ```
 
+```{r}
+#| label: colores
+#| echo: false
+
+# Paleta base (Okabe–Ito: colorblind-safe)
+col <- c(
+  area_quemada       = "#D55E00", # vermillion (área quemada)
+  cantidad_incendios = "#111111", # negro suave (cantidad de incendios)
+  tendencia          = "#6B6B6B"  # gris para líneas de tendencia
+)
+
+# Utilidad para transparencias cuando haga falta
+col_a <- function(hex, alpha = 0.3) grDevices::adjustcolor(hex, alpha.f = alpha)
+```
+
 ## Registros de incendios
 
 En la siguiente tabla, la longitud y la latitud corresponden a las coordenadas geográficas (WGS84) del centroide del polígono del incendio. La columna de temperatura corresponde al promedio de temperatura a 2 metros sobre la superficie durante la fecha de emisión de la alarma, mientras que la columna de precipitación al total de precipitación durante la fecha de emisión de la alarma.
@@ -247,10 +262,8 @@ t <-
 t
 ```
 
-En el siguiente mapa se muestran los polígonos de los incendios y la temperatura a 2 m del suelo del sitio en el que ocurrieron.
-
 ```{r}
-#| label: mapas-incendios
+#| label: mapa-incendios
 #| echo: false
 #| message: false
 #| warning: false
@@ -269,96 +282,96 @@ tm_shape(ca) +
   tm_layout(bg.color = "white", legend.outside = TRUE, frame = FALSE)
 ```
 
-## Cantidad de incendios por año
+En mapa anterior muestra los polígonos de los incendios coloreados según el promedio de temperatura a 2 metros sobre la superficie durante la fecha de emisión de la alarma. Puede observarse que los incendios se concentran en las estribaciones de la Sierra Nevada y de las cordilleras costeras, donde hay más combustible continuo (ej. matorrales o bosques), así como pendientes y eventos de calor y viento que favorecen megaincendios.
+
+La “franja vacía” en el centro corresponde al Valle Central (Sacramento–San Joaquín). Se aprecian pocos incendios debido a que ahí predomina la agricultura intensiva y el uso urbano del suelo. Hay poco combustible continuo, los campos irrigados y barbechos actúan como cortafuegos y el mosaico de parcelas limita la propagación, por lo que muchos incendios se detienen en viñedos y otros cultivos de frutas (<https://ucanr.edu/program/uc-anr-fire-network/fire-protection-crops-vineyards-and-orchards>). Además, los polígonos publicados por CAL FIRE suelen ser de incendios forestales/agrícolas “wildland”; así que muchas quemas agrícolas no se cartografían como polígonos de gran incendio, por lo que el valle podría estar sub-representado.
+
+## Cantidad de incendios y área quemada por año
 
 ```{r}
-#| label: grafico-cantidad-incendios-por-anio
+#| label: grafico-cantidad-incendios-area-quemada
+#| code-fold: true
 #| warning: false
 #| message: false
-#| code-fold: true
 
-# Gráfico ggplot2 de líneas + tendencia
-g <-
-  ggplot(
-    incendios_por_anio, 
-    aes(
-      x = anio, 
-      y = n, 
-      group = 1,
-      text = paste0(
-        "Año: ", anio,
-        "<br>Cantidad de incendios: ", comma(n)
-      )
+# Serie base con tooltips
+serie_na <-
+  incendios_por_anio |>
+  dplyr::arrange(anio) |>
+  dplyr::mutate(
+    tt_area = paste0(
+      "Año: ", anio,
+      "<br>Área quemada: ", scales::comma(area_quemada_total), " ha"
+    ),
+    tt_n = paste0(
+      "Año: ", anio,
+      "<br>Cantidad de incendios: ", scales::comma(n)
     )
-  ) +
-  geom_line(color = "red", linewidth = 1) + # línea principal
-  geom_point(color = "red", size = 2) +     # puntos sobre la línea
-  geom_smooth(method = "lm", se = FALSE,    # línea de tendencia
-              linetype = "dashed", linewidth = 0.8,
-              color = "gray30") +
-  labs(
-    x = "Año",
-    y = "Cantidad de incendios"
-  ) +
-  scale_x_continuous(breaks = cortes_anios, limits = lim_x, minor_breaks = NULL) +
-  theme_minimal(base_size = 12) +
-  theme(
-    panel.grid.major.x = element_blank(),
-    axis.text.x = element_text(angle = 45, hjust = 1)
   )
 
-# Convertir a gráfico interactivo plotly
-g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
+# Datos para líneas de tendencia (ignorar NA)
+df_area <- tidyr::drop_na(serie_na, area_quemada_total)
+df_n    <- tidyr::drop_na(serie_na, n)
 
-# Mostrar el gráfico
-g_interactivo
+pred_area <- tibble::tibble(
+  anio = df_area$anio,
+  yhat = predict(stats::lm(area_quemada_total ~ anio, data = df_area), newdata = df_area)
+)
+pred_n <- tibble::tibble(
+  anio = df_n$anio,
+  yhat = predict(stats::lm(n ~ anio, data = df_n), newdata = df_n)
+)
+
+# Plotly con doble eje (izq: área; der: cantidad)
+  fig <- plotly::plot_ly() |>
+    plotly::add_lines(
+    data = serie_na,
+    x = ~anio, y = ~area_quemada_total,
+    name = "Área quemada (ha)",
+    line = list(color = col["area_quemada"], width = 2)
+  ) |>
+  plotly::add_lines(
+    data = serie_na,
+    x = ~anio, y = ~n,
+    name = "Cantidad de incendios",
+    line = list(color = col["cantidad_incendios"], width = 2),
+    yaxis = "y2"
+  ) |>
+  plotly::add_lines(
+    data = pred_area, x = ~anio, y = ~yhat,
+    showlegend = FALSE, line = list(color = col["area_quemada"], dash = "dash", width = 1)
+  ) |>
+  plotly::add_lines(
+    data = pred_n, x = ~anio, y = ~yhat,
+    showlegend = FALSE, yaxis = "y2",
+    line = list(color = col["cantidad_incendios"], dash = "dash", width = 1)
+  ) |>
+  plotly::layout(
+    xaxis = list(
+      title = "Año",
+      tickvals = cortes_anios,
+      range = c(min(lim_x), max(lim_x))
+    ),
+    yaxis = list(
+      title = "Área quemada (ha)",
+      tickformat = ",.0f"
+    ),
+    yaxis2 = list(
+      title = list(text = "Cantidad de incendios", standoff = 16),
+      overlaying = "y",
+      side = "right",
+      tickformat = ",.0f",
+      automargin = TRUE
+    ),
+    legend = list(orientation = "h", x = 0, y = 1.15),
+    margin = list(t = 90, r = 80, b = 60, l = 60)
+  ) |>
+  plotly::config(locale = "es", displayModeBar = TRUE)
+
+fig
 ```
 
-## Área quemada por año
-
-```{r}
-#| label: grafico-area-quemada-por-anio
-#| warning: false
-#| message: false
-#| code-fold: true
-
-# Gráfico ggplot2 de líneas + tendencia
-g <-
-  ggplot(
-    incendios_por_anio,
-    aes(
-      x = anio,
-      y = area_quemada_total,
-      group = 1,
-      text = paste0(
-        "Año: ", anio,
-        "<br>Área quemada (ha): ", comma(area_quemada_total), " ha"
-      )
-    )
-  ) +
-  geom_line(color = "red", linewidth = 1) + # línea principal
-  geom_point(color = "red", size = 2) +     # puntos
-  geom_smooth(method = "lm", se = FALSE,    # línea de tendencia
-              linetype = "dashed", linewidth = 0.8,
-              color = "gray30") +
-  labs(
-    x = "Año",
-    y = "Área quemada (ha)"
-  ) +
-  scale_y_continuous(labels = comma) + # separador de miles en eje Y
-  scale_x_continuous(breaks = cortes_anios, limits = lim_x, minor_breaks = NULL) +
-  theme_minimal(base_size = 12) +
-  theme(
-    panel.grid.major.x = element_blank(),
-    axis.text.x = element_text(angle = 45, hjust = 1)
-  )
-
-# Convertir a gráfico interactivo plotly
-g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
-
-# Mostrar el gráfico
-g_interactivo
-```
+Tanto la cantidad de incendios como el área quemada anualmente muestran tendencias crecientes. El aumento es más marcado desde mediados de los 2000. El área quemada es muy volátil: años relativamente tranquilos se alternan con picos extremos (especialmente ~2018–2021, con 2020 como caso atípico o *outlier* histórico). Esto sugiere que unos pocos megaincendios podrían explicar gran parte del total anual. Hay años con muchos incendios pero área moderada, y otros con menos eventos pero áreas enormes. Es decir, el tamaño promedio de los incendios cambia con las condiciones (sequía, olas de calor, viento), no solo con el conteo.
 
 ## Temperatura promedio por año del sitio del incendio el día de emisión de la alarma
 
