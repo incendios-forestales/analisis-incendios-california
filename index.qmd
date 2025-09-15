@@ -18,13 +18,17 @@ Mediante técnicas de procesamiento y análisis espacial de datos geográficos, 
 
 Para llevar a cabo el estudio se utilizaron dos tipos de datos: de incendios forestales y climáticos.
 
-Los datos de incendios forestales se obtuvieron a través del [Departamento de Silvicultura y Protección contra Incendios de California (CAL FIRE)](https://www.fire.ca.gov/), el cual publica registros de incendios ocurridos desde 1878 hasta la actualidad. Se desarrolló un programa que accedió la interfaz de programación de aplicaciones (API) de CAL FIRE y para cada incendio se descargaron más de 20 variables asociadas, entre las que pueden mencionarse su nombre, causa, área, fecha de emisión de la alarma, fecha de contención y geometría de polígono.
+Los datos de incendios forestales se obtuvieron a través del [Departamento de Silvicultura y Protección contra Incendios de California (CAL FIRE)](https://www.fire.ca.gov/), el cual publica registros de incendios ocurridos desde 1878 hasta la actualidad. Se desarrolló un programa que accedió la interfaz de programación de aplicaciones (API) de CAL FIRE y para cada incendio se descargaron más de 20 variables asociadas, entre las que pueden mencionarse su nombre, causa, área quemada, fecha de emisión de la alarma, fecha de contención y geometría de polígono.
 
 Por su parte, los datos climáticos provienen del [Centro Europeo de Previsiones Meteorológicas a Medio Plazo (ECMWF)](https://www.ecmwf.int/) y su [Reanálisis Atmosférico de Quinta Generación (ERA5)](https://cds.climate.copernicus.eu/). ERA5 integra observaciones y un modelo numérico para reconstruir histórica y continuamente el estado de la atmósfera y de la superficie terrestre. Combina millones de observaciones (estaciones, radiosondeos, satélites, boyas, etc.) para generar, en una malla regular, series temporales homogéneas de muchas variables atmosféricas y de superficie como temperatura, precipitación, viento, humedad, radiación, presión y oleaje. Cubre desde 1940 hasta el presente y cuenta con una resolución espacial de ~0.25° (≈31 km). En este trabajo se utilizó la versión enfocada en tierra, denominada ERA5-Land, con ~0.1° (≈9 km) de resolución y cobertura desde 1950. Estos datos se descargaron mediante un programa que accede el API de ERA5. De esta manera, las diferentes variables climáticas fueron asociadas a los sitios de los incendios.
 
 El estudio se realizó para el periodo entre 1961 y 2024. El rango posterior a 1990 —en particular 1991–2020— se usa como "normal climatológica vigente" para el monitoreo operativo del clima actual. La escogencia de 1961–1990 proviene de las Normales Climatológicas de la OMM (WMO), que definen promedios de 30 años. La OMM mantiene 1961–1990 como referencia estándar para la evaluación del cambio climático a largo plazo. Además, representa el clima “pre-aceleración” del calentamiento global y está ampliamente documentado.
 
+El análisis incluyó un total de 14451 registros de incendios forestales ocurridos en California entre 1961 y 2024, todos con fecha de emisión de la alarma, hora de emisión de la alarma y coordenadas geográficas. A cada incendio se le asociaron variables climáticas como temperatura, precipitación y viento.
+
 Los programas para acceder las API de CAL FIRE y ERA5 fueron desarrollados en el lenguaje de programación [R](https://www.r-project.org/). Los documentos con visualizaciones como tablas, gráficos estadísticos y mapas interactivos fueron desarrollados con R y con el sistema de publicación técnica y científica [Quarto](https://quarto.org/).
+
+# Visualizaciones de datos
 
 ```{r}
 #| label: cargar-bibliotecas
@@ -39,9 +43,10 @@ library(lubridate)
 library(DT)
 library(plotly)
 library(scales)
+library(sf)
 library(terra)
 library(tmap)
-library(leaflet)
+library(rnaturalearth)
 library(RColorBrewer)
 ```
 
@@ -63,12 +68,21 @@ lim_x <- range(cortes_anios)
 #| code-fold: true
 #| echo: false
 
-# Leer archivo
-incendios <- read_csv("datos/incendios_ca_combinado_1960-2024.csv")
+# Leer archivos
+incendios    <- read_csv("datos/incendios_ca_combinado_1960-2024.csv")
+incendios_sf <- st_read(
+  "/vsizip/datos/incendios_ca_combinado_1960-2024.zip/incendios_ca_combinado_1960-2024.gpkg",
+  quiet = TRUE
+) |>
+st_make_valid()
 
 # Eliminar incendios que no tienen ALARM_DATE
 incendios <-
   incendios |>
+  drop_na(ALARM_DATE)
+
+incendios_sf <-
+  incendios_sf |>
   drop_na(ALARM_DATE)
 
 # Convertir acres a hectáreas (1 acre = 0.40468564224 hectáreas)
@@ -186,7 +200,9 @@ wind_speed_10m_12m           <- wind_speed_10m_12m[[names(wind_speed_10m_12m)   
 lai_low_vegetation_12m       <- lai_low_vegetation_12m[[names(lai_low_vegetation_12m)             %in% yrs]]
 ```
 
-# Registros de incendios
+## Registros de incendios
+
+En la siguiente tabla, la longitud y la latitud corresponden a las coordenadas geográficas (WGS84) del centroide del polígono del incendio. La columna de temperatura corresponde al promedio de temperatura a 2 metros sobre la superficie durante la fecha de emisión de la alarma, mientras que la columna de precipitación al total de precipitación durante la fecha de emisión de la alarma.
 
 ```{r}
 #| label: tabla-incendios
@@ -195,22 +211,65 @@ lai_low_vegetation_12m       <- lai_low_vegetation_12m[[names(lai_low_vegetation
 # Definir la tabla DT
 t <-
   incendios |>
-  select(FIRE_NAME, ALARM_DATE, GIS_HA, TEMPERATURE_2M_ALARM_DATE_MEAN) |>
+  mutate(
+    # Deja solo la parte de fecha y conviértela a Date (sirve si viene como "1960-03-18T08:00:00Z")
+    ALARM_DATE = {
+      x <- as.character(ALARM_DATE)
+      x <- ifelse(nchar(x) > 10, substr(x, 1, 10), x)
+      as.Date(x)
+    }
+  ) |>
+  select(
+    FIRE_NAME, Lon, Lat, ALARM_DATE, 
+    GIS_HA, TEMPERATURE_2M_ALARM_DATE_MEAN, PRECIPITATION_ALARM_DATE_SUM
+  ) |>
   arrange(ALARM_DATE) |>
   datatable(
     rownames = FALSE,
-    colnames = c("Nombre del incendio", "Fecha de alarma", "Área quemada (ha)", "Temperatura (°C)"),
+    colnames = c(
+      "Nombre del incendio", "Longitud", "Latitud", "Fecha de alarma", 
+      "Área quemada (ha)", "Temperatura (°C)", "Precipitación (mm)"
+    ),
     options = list(
       pageLength = 10,
       language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
     )
+  ) |>
+  formatRound(
+    columns = c(
+      "GIS_HA", "Lon", "Lat", 
+      "TEMPERATURE_2M_ALARM_DATE_MEAN", "PRECIPITATION_ALARM_DATE_SUM"
+    ),
+    digits = 4
   )
 
 # Mostrar la tabla
 t
 ```
 
-# Cantidad de incendios por año
+En el siguiente mapa se muestran los polígonos de los incendios y la temperatura a 2 m del suelo del sitio en el que ocurrieron.
+
+```{r}
+#| label: mapas-incendios
+#| echo: false
+#| message: false
+#| warning: false
+#| code-fold: true
+
+incendios_web <- st_transform(incendios_sf, 3857)
+usa <- ne_states(country = "United States of America", returnclass = "sf")
+ca  <- subset(usa, name == "California") |> st_transform(3857)
+
+tm_shape(ca) + 
+  tm_polygons(col = "#f5f5f5", border.col = "#bdbdbd") +
+  tm_shape(incendios_web) +
+  tm_polygons(col = "TEMPERATURE_2M_ALARM_DATE_MEAN",
+              palette = "-RdYlBu", style = "cont", alpha = 0.6,
+              border.col = NA, title = "Temperatura del sitio\ndel incendio (°C)") +
+  tm_layout(bg.color = "white", legend.outside = TRUE, frame = FALSE)
+```
+
+## Cantidad de incendios por año
 
 ```{r}
 #| label: grafico-cantidad-incendios-por-anio
@@ -255,7 +314,7 @@ g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
 g_interactivo
 ```
 
-# Área quemada por año
+## Área quemada por año
 
 ```{r}
 #| label: grafico-area-quemada-por-anio
@@ -301,7 +360,7 @@ g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
 g_interactivo
 ```
 
-# Temperatura promedio por año del sitio del incendio el día de emisión de la alarma
+## Temperatura promedio por año del sitio del incendio el día de emisión de la alarma
 
 ```{r}
 #| label: grafico-temperatura-por-anio
@@ -348,7 +407,7 @@ g_interactivo <- ggplotly(g, tooltip = "text") |> config(locale = 'es')
 g_interactivo
 ```
 
-# Promedio de temperatura por año
+## Promedio de temperatura por año
 
 ```{r}
 #| label: grafico-2m-temperature-promedio-por-anio
@@ -385,7 +444,7 @@ g <- ggplot(
 ggplotly(g, tooltip = "text") |> config(locale = "es")
 ```
 
-# Evolución anual del área quemada y la temperatura
+## Evolución anual del área quemada y la temperatura
 
 ```{r}
 #| label: grafico-area-y-temp-plotly
@@ -476,7 +535,7 @@ fig <- plotly::plot_ly() |>
 fig
 ```
 
-# Relación lineal entre temperatura y área quemada
+## Relación lineal entre temperatura y área quemada
 
 ```{r}
 #| label: significacion-area-vs-temperatura
@@ -603,7 +662,7 @@ fig_sig
 
 El gráfico anterior muestra que a mayor temperatura media, hay más área quemada. La línea resume esa tendencia. Por cada grado adicional de temperatura, se queman en promedio unas 223 mil hectáreas más. Incluso siendo conservadores, el rango probable va de 50 mil a 396 mil hectáreas. El resultado es estadísticamente significativo y la temperatura por sí sola explica alrededor de un 36 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
 
-# Total de precipitación por año
+## Total de precipitación por año
 
 ```{r}
 #| label: grafico-total-precipitation-por-anio
@@ -640,7 +699,7 @@ g <- ggplot(
 ggplotly(g, tooltip = "text") |> config(locale = "es")
 ```
 
-# Evolución anual del área quemada y la precipitación
+## Evolución anual del área quemada y la precipitación
 
 ```{r}
 #| label: grafico-area-y-prec-plotly
@@ -731,7 +790,7 @@ fig <- plotly::plot_ly() |>
 fig
 ```
 
-# Relación lineal entre precipitación y área quemada
+## Relación lineal entre precipitación y área quemada
 
 ```{r}
 #| label: significacion-area-vs-precipitacion
