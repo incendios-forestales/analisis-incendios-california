@@ -1,7 +1,7 @@
 ---
 title: "Análisis de datos de incendios forestales en California"
 author: "Mariela Alvarado, Manuel Vargas"
-date: "2025-09-15"
+date: "2025-09-16"
 format: html
 toc: true
 lang: es
@@ -24,7 +24,7 @@ Por su parte, los datos climáticos provienen del [Centro Europeo de Previsiones
 
 El estudio se realizó para el periodo entre 1961 y 2024. El rango posterior a 1990 —en particular 1991–2020— se usa como "normal climatológica vigente" para el monitoreo operativo del clima actual. La escogencia de 1961–1990 proviene de las Normales Climatológicas de la OMM (WMO), que definen promedios de 30 años. La OMM mantiene 1961–1990 como referencia estándar para la evaluación del cambio climático a largo plazo. Además, representa el clima “pre-aceleración” del calentamiento global y está ampliamente documentado.
 
-El análisis incluyó un total de 14451 registros de incendios forestales ocurridos en California entre 1961 y 2024, todos con fecha de emisión de la alarma, hora de emisión de la alarma y coordenadas geográficas. A cada incendio se le asociaron variables climáticas como temperatura, precipitación y viento.
+El análisis incluyó un total de 14358 registros de incendios forestales ocurridos en California entre 1961 y 2024, todos con fecha de emisión de la alarma, hora de emisión de la alarma y coordenadas geográficas. A cada incendio se le asociaron variables climáticas como temperatura, precipitación y viento.
 
 Los programas para acceder las API de CAL FIRE y ERA5 fueron desarrollados en el lenguaje de programación [R](https://www.r-project.org/). Los documentos con visualizaciones como tablas, gráficos estadísticos y mapas interactivos fueron desarrollados con R y con el sistema de publicación técnica y científica [Quarto](https://quarto.org/).
 
@@ -80,11 +80,13 @@ st_make_valid()
 # Eliminar incendios que no tienen ALARM_DATE
 incendios <-
   incendios |>
-  drop_na(ALARM_DATE)
+  drop_na(ALARM_DATE) |>
+  filter(year(ALARM_DATE) >= 1961 & year(ALARM_DATE) <= 2024)
 
 incendios_sf <-
   incendios_sf |>
-  drop_na(ALARM_DATE)
+  drop_na(ALARM_DATE) |>
+  filter(year(ALARM_DATE) >= 1961 & year(ALARM_DATE) <= 2024)
 
 # Convertir acres a hectáreas (1 acre = 0.40468564224 hectáreas)
 incendios <- 
@@ -1220,6 +1222,239 @@ fig_sig
 ```
 
 El gráfico anterior muestra que a mayor precipitación, hay menos área quemada. Por cada milímetro adicional de precipitación, se queman en promedio unas 452 hectáreas menos. El rango probable va de 930 hectáreas menos a 25 hectáreas más. El resultado es estadísticamente significativo, pero no tanto como en el caso de la precipitación y el área quemada. La precipitación por sí sola explica alrededor de un 7 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
+
+#### Diferencias entre periodos
+
+```{r}
+#| label: comparacion-precipitacion-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- Si no existe, construir la serie anual de precipitación (mm/año) -------
+if (!exists("precipitacion_promedio_anual")) {
+  # Promedio espacial anual por capa del ráster
+  vals_p <- drop(terra::global(total_precipitation_12m, mean, na.rm = TRUE)[, 1])
+  anios_p <- suppressWarnings(as.integer(names(total_precipitation_12m)))
+  if (any(is.na(anios_p))) anios_p <- seq_len(terra::nlyr(total_precipitation_12m))
+
+  # Conversión a mm si el ráster está en metros (heurística simple)
+  factor_mm <- if (stats::median(vals_p, na.rm = TRUE) < 10) 1000 else 1
+  vals_p_mm <- vals_p * factor_mm
+
+  precipitacion_promedio_anual <-
+    tibble::tibble(anio = anios_p, precipitacion_mm = vals_p_mm) |>
+    dplyr::arrange(anio)
+}
+
+# --- Resumen por periodos ----------------------------------------------------
+tabla_periodos_pp <-
+  precipitacion_promedio_anual |>
+  dplyr::filter(anio >= 1961, anio <= 2024) |>
+  dplyr::mutate(
+    periodo = dplyr::if_else(anio <= 1990, "1961–1990", "1991–2024")
+  ) |>
+  dplyr::group_by(periodo) |>
+  dplyr::summarise(
+    prec_promedio_mm = mean(precipitacion_mm, na.rm = TRUE),  # mm/año promedio del periodo
+    n_anios          = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(periodo = factor(periodo, levels = c("1961–1990", "1991–2024"))) |>
+  dplyr::arrange(periodo)
+
+# --- Delta absoluto y relativo (reciente − base) -----------------------------
+a_p     <- tabla_periodos_pp$prec_promedio_mm[1]
+b_p     <- tabla_periodos_pp$prec_promedio_mm[2]
+delta_p <- b_p - a_p
+pct_p   <- if (is.na(a_p) || a_p == 0) NA_real_ else delta_p / a_p
+
+# --- Gráfico: precipitación total anual promedio por periodo -----------------
+plotly::plot_ly(
+  data = tabla_periodos_pp,
+  x    = ~periodo,
+  y    = ~prec_promedio_mm,
+  type = "bar",
+  text = ~scales::comma(round(prec_promedio_mm, 0)),
+  textposition = "outside",
+  hovertemplate = paste(
+    "<b>%{x}</b><br>",
+    "Precipitación prom. anual: %{y:,.0f} mm<br>",
+    "Años en el periodo: %{customdata}<extra></extra>"
+  ),
+  customdata = ~n_anios,
+  marker = list(color = col["precipitacion"])
+) |>
+plotly::layout(
+  title = "Precipitación total anual por periodo (promedio anual)",
+  yaxis = list(title = "mm/año", tickformat = ",.0f"),
+  xaxis = list(title = ""),
+  showlegend = FALSE,
+  margin = list(t = 80, r = 30, b = 40, l = 70),
+  annotations = list(
+    list(
+      x = 0.5, y = 1.12, xref = "paper", yref = "paper",
+      text = paste0(
+        "Δ = ", scales::comma(round(delta_p, 0)), " mm",
+        if (!is.na(pct_p)) paste0(" (", scales::percent(pct_p, accuracy = 0.1), ")") else ""
+      ),
+      showarrow = FALSE, font = list(size = 12)
+    )
+  )
+) |>
+plotly::config(locale = "es", displayModeBar = FALSE)
+```
+
+El gráfico indica una leve disminución de la precipitación media anual entre 1961–1990 y 1991–2024: ~574 → ~555 mm/año, es decir Δ = −19 mm (−3.3 %).
+
+```{r}
+#| label: mapas-precipitacion-facets-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- 1) Promedios por periodo (mm/año) --------------------------------------
+yrs_6190 <- as.character(1961:1990)
+yrs_9124 <- as.character(1991:2024)
+
+# Heurística de unidades: ERA5-Land suele venir en metros; si es <10, convertir a mm
+muestra_mean <- drop(terra::global(total_precipitation_12m[[1]], mean, na.rm = TRUE)[, 1])
+factor_mm    <- if (is.na(muestra_mean)) 1 else if (muestra_mean < 10) 1000 else 1
+
+p_6190 <- terra::app(total_precipitation_12m[[names(total_precipitation_12m) %in% yrs_6190]],
+                     mean, na.rm = TRUE) * factor_mm
+p_9124 <- terra::app(total_precipitation_12m[[names(total_precipitation_12m) %in% yrs_9124]],
+                     mean, na.rm = TRUE) * factor_mm
+
+names(p_6190) <- "1961–1990"
+names(p_9124) <- "1991–2024"
+
+r_per_p <- c(p_6190, p_9124)  # stack con 2 capas (una por periodo)
+
+# --- 2) Misma escala de colores en ambos mapas ------------------------------
+mm    <- terra::minmax(r_per_p)
+rng   <- range(mm, na.rm = TRUE)
+brks  <- pretty(rng, n = 9)  # mismos cortes para comparabilidad
+
+# --- 3) Borde de California (contexto) --------------------------------------
+if (!exists("ca")) {
+  usa <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf")
+  ca  <- subset(usa, name == "California")
+}
+ca_ll <- sf::st_transform(ca, crs = terra::crs(r_per_p, proj = TRUE))
+
+# --- 4) Mapas lado a lado (facets) ------------------------------------------
+tmap_mode("plot")
+
+tm_shape(r_per_p) +
+  tm_raster(
+    palette = "PuBuGn",        # paleta solicitada
+    style   = "fixed",         # cortes fijos => comparables
+    breaks  = brks,
+    title   = "Prec. promedio (mm/año)"
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_facets(ncol = 2, free.scales = FALSE) +  # misma escala en ambos
+  tm_layout(
+    legend.outside = TRUE,
+    legend.format  = list(text.separator = " a "),
+    frame = FALSE
+  )
+```
+
+```{r}
+#| label: mapas-diferencia-precipitacion-facets-estatico-titulos-fuera
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- 1) Promedios por periodo (mm/año) y diferencia -------------------------
+yrs_6190 <- as.character(1961:1990)
+yrs_9124 <- as.character(1991:2024)
+
+# Heurística de unidades (ERA5-Land suele venir en m): convertir a mm si procede
+muestra_mean <- drop(terra::global(total_precipitation_12m[[1]], mean, na.rm = TRUE)[, 1])
+factor_mm    <- if (is.na(muestra_mean)) 1 else if (muestra_mean < 10) 1000 else 1
+
+p_6190 <- terra::app(total_precipitation_12m[[names(total_precipitation_12m) %in% yrs_6190]],
+                     mean, na.rm = TRUE) * factor_mm
+p_9124 <- terra::app(total_precipitation_12m[[names(total_precipitation_12m) %in% yrs_9124]],
+                     mean, na.rm = TRUE) * factor_mm
+
+dP <- p_9124 - p_6190                        # ΔP (reciente − base)
+names(dP) <- "ΔP (mm/año)"
+
+# --- 2) Escala de colores común (simétrica alrededor de 0) ------------------
+rng     <- drop(terra::global(dP, range, na.rm = TRUE))
+max_abs <- max(abs(rng[1]), abs(rng[2]), na.rm = TRUE)
+brks    <- pretty(c(-max_abs, max_abs), n = 9)
+brks    <- sort(unique(c(brks, 0)))         # asegurar que 0 esté incluido
+
+# --- 3) Bordes de California y puntos (centroides por Lon/Lat) --------------
+if (!exists("ca")) {
+  usa <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf")
+  ca  <- subset(usa, name == "California")
+}
+ca_ll <- sf::st_transform(ca, crs = terra::crs(dP, proj = TRUE))
+
+inc_rec_pts <- incendios |>
+  dplyr::mutate(anio = lubridate::year(ALARM_DATE)) |>
+  dplyr::filter(anio >= 1991, anio <= 2024, !is.na(Lon), !is.na(Lat)) |>
+  sf::st_as_sf(coords = c("Lon", "Lat"), crs = 4326, remove = FALSE) |>
+  sf::st_transform(crs = terra::crs(dP, proj = TRUE))
+
+# --- 4) Dos mapas estáticos lado a lado; títulos fuera del mapa -------------
+tmap_mode("plot")
+
+outer_top <- 0.10  # margen superior para ubicar títulos fuera del mapa
+
+# Izquierda: solo raster de diferencia con leyenda
+m_left <-
+  tm_shape(dP) +
+  tm_raster(
+    palette = "PuBuGn",      # paleta solicitada
+    style   = "fixed",
+    breaks  = brks,
+    title   = "ΔP (mm/año)"
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_credits("ΔP (1991–2024 − 1961–1990)",
+             position = c("center", "top"),
+             size = 1.1, fontface = "bold") +
+  tm_layout(
+    legend.outside = TRUE,
+    legend.outside.position = "left",
+    legend.stack = "vertical",
+    outer.margins = c(outer_top, 0.02, 0.02, 0.02),
+    frame = FALSE
+  )
+
+# Derecha: mismo raster + puntos, sin leyenda
+m_right <-
+  tm_shape(dP) +
+  tm_raster(
+    palette = "PuBuGn",
+    style   = "fixed",
+    breaks  = brks
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_shape(inc_rec_pts) +
+  tm_dots(col = "#111111", size = 0.03, alpha = 0.8, legend.show = FALSE) +
+  tm_credits("ΔP + incendios (1991–2024)",
+             position = c("center", "top"),
+             size = 1.1, fontface = "bold") +
+  tm_layout(
+    legend.outside = TRUE,
+    legend.outside.position = "left",
+    legend.stack = "vertical",
+    outer.margins = c(outer_top, 0.02, 0.02, 0.02),
+    frame = FALSE
+  )
+
+tmap::tmap_arrange(m_left, m_right, ncol = 2, widths = c(1, 1))
+```
+
+Los mapas muestran que la precipitación media anual mantiene su máximo en las montañas costeras del norte y el sector occidental de la Sierra Nevada, mientras que el interior y el sur son más secos. La diferencia entre periodos (ΔP) sugiere un ligero a moderado descenso generalizado (≈−50 a 0 mm/año en amplias zonas) con aumentos locales (≈50–150 mm/año) en sectores puntualesl. Al sobreponer los centroides de incendios recientes, se observa su concentración en cadenas montañosas con vegetación continua.
 
 ## Datos poblacionales
 
