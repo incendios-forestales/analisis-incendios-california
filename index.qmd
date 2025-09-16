@@ -371,7 +371,106 @@ fig
 
 Tanto la cantidad de incendios como el área quemada anualmente muestran tendencias crecientes. El aumento es más marcado desde mediados de los 2000. El área quemada es muy volátil: años relativamente tranquilos se alternan con picos extremos (especialmente ~2018–2021, con 2020 como caso atípico o *outlier* histórico). Esto sugiere que unos pocos megaincendios podrían explicar gran parte del total anual. Hay años con muchos incendios pero área moderada, y otros con menos eventos pero áreas enormes. Es decir, el tamaño promedio de los incendios cambia con las condiciones (sequía, olas de calor, viento), no solo con el conteo.
 
-### Diferencias entre períodos
+### Patrones mensuales
+
+#### Cantidad de incendios por mes y año
+
+```{r}
+#| label: grafico-cantidad-incendios-por-mes-anio
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+# Heatmap
+g <-
+  ggplot(
+    incendios_por_anio_mes,
+    aes(
+      x = mes,
+      y = factor(anio),
+      fill = n,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Mes: ", mes,
+        "<br>Cantidad de incendios: ", n
+      )
+    )
+  ) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(name = "Incendios", option = "inferno", direction = -1) +
+  labs(
+    x = "Mes",
+    y = "Año"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Convertir a gráfico interactivo plotly
+# g_interactivo <- 
+#   ggplotly(g, tooltip = "text", height = 700) |> 
+#   config(locale = 'es')
+
+# Mostrar gráfico
+g
+```
+
+El mapa de calor revela una estacionalidad marcada: muy pocos incendios en invierno y principios de primavera, con un rápido aumento a partir de mayo, pico entre julio y agosto y descenso hacia octubre. A partir de los 2000 se observan colores más intensos en verano y, en varios años, con extensión a septiembre–octubre. Destaca el periodo 2017-2021.
+
+#### Área quemada por mes y año
+
+```{r}
+#| label: grafico-area-quemada-por-mes-anio
+#| code-fold: true
+#| fig-height: 8
+#| fig-width: 8
+
+# Heatmap
+g <-
+  ggplot(
+    incendios_por_anio_mes,
+    aes(
+      x = mes,
+      y = factor(anio),
+      fill = area_quemada_total,
+      text = paste0(
+        "Año: ", anio,
+        "<br>Mes: ", mes,
+        "<br>Área quemada: ", comma(area_quemada_total, accuracy = 1), " ha"
+      )
+    )
+  ) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(
+    name       = "Área (ha)",
+    option     = "inferno",
+    direction  = -1,
+    labels     = label_number(accuracy = 1, big.mark = ",")
+  ) +
+  labs(
+    x = "Mes",
+    y = "Año"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Versión interactiva
+# g_interactivo <- 
+#   ggplotly(g, tooltip = "text", height = 700) |> 
+#   config(locale = 'es')
+
+# Mostrar el gráfico
+g
+```
+
+El mapa de calor de área quemada muestra una estacionalidad aún más marcada que el conteo: los picos se concentran entre julio y septiembre, con algunos octubres muy activos, y destacan años extremos recientes (en especial 2020, con un máximo excepcional en agosto–septiembre). Se observa, además, cierta extensión de la temporada hacia septiembre–octubre en las últimas décadas.
+
+### Diferencias entre periodos
 
 ```{r}
 #| label: comparacion-incendios-por-periodo
@@ -757,7 +856,7 @@ fig_sig
 
 El gráfico anterior muestra que a mayor temperatura, hay más área quemada. Por cada grado adicional de temperatura, se queman en promedio unas 223 mil hectáreas más. Incluso siendo conservadores, el rango probable va de 50 mil a 396 mil hectáreas. El resultado es estadísticamente significativo y la temperatura por sí sola explica alrededor de un 36 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
 
-#### Diferencias entre períodos
+#### Diferencias entre periodos
 
 ```{r}
 #| label: comparacion-temperatura-por-periodo
