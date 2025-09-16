@@ -209,9 +209,11 @@ col <- c(
 col_a <- function(hex, alpha = 0.3) grDevices::adjustcolor(hex, alpha.f = alpha)
 ```
 
-## Registros de incendios
+## Datos sobre incendios forestales
 
 En la siguiente tabla, la longitud y la latitud corresponden a las coordenadas geográficas (WGS84) del centroide del polígono del incendio. La columna de temperatura corresponde al promedio de temperatura a 2 metros sobre la superficie durante la fecha de emisión de la alarma, mientras que la columna de precipitación al total de precipitación durante la fecha de emisión de la alarma.
+
+### Registros de incendios
 
 ```{r}
 #| label: tabla-incendios
@@ -279,8 +281,6 @@ tm_shape(ca) +
 En mapa anterior muestra los polígonos de los incendios coloreados según el promedio de temperatura a 2 metros sobre la superficie durante la fecha de emisión de la alarma. Puede observarse que los incendios se concentran en las estribaciones de la Sierra Nevada y de las cordilleras costeras, donde hay más combustible continuo (ej. matorrales o bosques), así como pendientes y eventos de calor y viento que favorecen megaincendios.
 
 La “franja vacía” en el centro corresponde al Valle Central (Sacramento–San Joaquín). Se aprecian pocos incendios debido a que ahí predomina la agricultura intensiva y el uso urbano del suelo. Hay poco combustible continuo, los campos irrigados y barbechos actúan como cortafuegos y el mosaico de parcelas limita la propagación, por lo que muchos incendios se detienen en viñedos y otros cultivos de frutas (<https://ucanr.edu/program/uc-anr-fire-network/fire-protection-crops-vineyards-and-orchards>). Además, los polígonos publicados por CAL FIRE suelen ser de incendios forestales/agrícolas “wildland”; así que muchas quemas agrícolas no se cartografían como polígonos de gran incendio, por lo que el valle podría estar sub-representado.
-
-## Incendios y área quemada por año
 
 ### Cantidad de incendios y área quemada por año
 
@@ -497,7 +497,9 @@ plotly::config(locale = "es", displayModeBar = FALSE)
 
 El incremento del promedio anual de hectáreas quemadas entre 1961–1990 y 1991–2024 es más marcado que el del conteo de incendios, lo que implica que el tamaño medio de los incendios ha crecido.
 
-## Relación entre temperatura y área quemada
+## Variables climáticas
+
+### Temperatura
 
 ```{r}
 #| label: grafico-2m-temperature-promedio-por-anio
@@ -535,7 +537,7 @@ temperatura_promedio_anual <-
 # ggplotly(g, tooltip = "text") |> config(locale = "es")
 ```
 
-### Evolución anual de temperatura y área quemada
+#### Evolución anual de temperatura y área quemada
 
 ```{r}
 #| label: grafico-area-y-temp-plotly
@@ -626,7 +628,7 @@ fig <- plotly::plot_ly() |>
 fig
 ```
 
-### Relación lineal entre temperatura y área quemada
+#### Relación lineal entre temperatura y área quemada
 
 ```{r}
 #| label: significacion-area-vs-temperatura
@@ -753,7 +755,217 @@ fig_sig
 
 El gráfico anterior muestra que a mayor temperatura, hay más área quemada. Por cada grado adicional de temperatura, se queman en promedio unas 223 mil hectáreas más. Incluso siendo conservadores, el rango probable va de 50 mil a 396 mil hectáreas. El resultado es estadísticamente significativo y la temperatura por sí sola explica alrededor de un 36 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
 
-## Relación entre precipitación y área quemada
+#### Diferencias entre períodos
+
+```{r}
+#| label: comparacion-temperatura-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Resumen de temperatura para dos periodos
+tabla_periodos_temp <-
+  temperatura_promedio_anual |>
+  dplyr::filter(anio >= 1961, anio <= 2024) |>
+  dplyr::mutate(
+    periodo = dplyr::if_else(anio <= 1990, "1961–1990", "1991–2024")
+  ) |>
+  dplyr::group_by(periodo) |>
+  dplyr::summarise(
+    temp_promedio_c = mean(temperatura, na.rm = TRUE), # °C promedio anual del periodo
+    n_anios         = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(periodo = factor(periodo, levels = c("1961–1990", "1991–2024"))) |>
+  dplyr::arrange(periodo)
+
+# Delta absoluto y relativo (periodo reciente - periodo base)
+a_t     <- tabla_periodos_temp$temp_promedio_c[1]
+b_t     <- tabla_periodos_temp$temp_promedio_c[2]
+delta_t <- b_t - a_t
+pct_t   <- if (is.na(a_t) || a_t == 0) NA_real_ else delta_t / a_t
+
+# Gráfico: temperatura promedio a 2 m por periodo
+plotly::plot_ly(
+  data = tabla_periodos_temp,
+  x    = ~periodo,
+  y    = ~temp_promedio_c,
+  type = "bar",
+  text = ~scales::number(temp_promedio_c, accuracy = 0.1),
+  textposition = "outside",
+  hovertemplate = paste(
+    "<b>%{x}</b><br>",
+    "Temperatura prom. anual: %{y:.1f} °C<br>",
+    "Años en el periodo: %{customdata}<extra></extra>"
+  ),
+  customdata = ~n_anios,
+  marker = list(color = col["temperatura"])
+) |>
+plotly::layout(
+  title = "Temperatura promedio a 2 m por periodo (promedio anual)",
+  yaxis = list(title = "°C", tickformat = ".1f"),
+  xaxis = list(title = ""),
+  showlegend = FALSE,
+  margin = list(t = 80, r = 30, b = 40, l = 70),
+  annotations = list(
+    list(
+      x = 0.5, y = 1.12, xref = "paper", yref = "paper",
+      text = paste0(
+        "Δ = ", scales::number(delta_t, accuracy = 0.1), " °C",
+        if (!is.na(pct_t)) paste0(" (", scales::percent(pct_t, accuracy = 0.1), ")") else ""
+      ),
+      showarrow = FALSE, font = list(size = 12)
+    )
+  )
+) |>
+plotly::config(locale = "es", displayModeBar = FALSE)
+```
+
+El gráfico compara la temperatura media anual a 2 m sobre la superficie entre 1961–1990 y 1991–2024, mostrando un aumento de ~0.8 °C (≈5.8%) en el periodo reciente. Se incrementa la frecuencia de años calurosos y disminuye la de años fríos.
+
+```{r}
+#| label: mapas-temperatura-facets-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- 1) Promedios por periodo (°C) ------------------------------------------
+yrs_6190 <- as.character(1961:1990)
+yrs_9124 <- as.character(1991:2024)
+
+t_6190 <- terra::app(temperature_2m_12m[[names(temperature_2m_12m) %in% yrs_6190]],
+                     fun = mean, na.rm = TRUE)
+t_9124 <- terra::app(temperature_2m_12m[[names(temperature_2m_12m) %in% yrs_9124]],
+                     fun = mean, na.rm = TRUE)
+
+names(t_6190) <- "1961–1990"
+names(t_9124) <- "1991–2024"
+
+r_per <- c(t_6190, t_9124)  # stack con 2 capas (una por periodo)
+
+# --- 2) Misma escala de colores en ambos mapas ------------------------------
+mm    <- terra::minmax(r_per)
+rng   <- range(mm, na.rm = TRUE)
+brks  <- pretty(rng, n = 9)  # mismos cortes para ambos paneles
+
+# --- 3) Borde de California (opcional, para contexto) -----------------------
+if (!exists("ca")) {
+  usa <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf")
+  ca  <- subset(usa, name == "California")
+}
+ca_ll <- sf::st_transform(ca, crs = terra::crs(r_per, proj = TRUE))
+
+# --- 4) Mapas lado a lado (facets) ------------------------------------------
+tmap_mode("plot")
+
+tm_shape(r_per) +
+  tm_raster(
+    palette = "-RdYlBu",        # rojo = más cálido, azul = más frío
+    style   = "fixed",          # usa cortes fijos para que los colores sean comparables
+    breaks  = brks,
+    title   = "Temp. promedio (°C)"
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_facets(ncol = 2, free.scales = FALSE) +  # misma escala en ambos
+  tm_layout(
+    legend.outside = TRUE,
+    legend.format  = list(text.separator = " a "),
+    frame = FALSE
+  )
+```
+
+```{r}
+#| label: mapas-diferencia-facets-estatico-titulos-fuera
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- 1) Promedios por periodo (°C) y diferencia -----------------------------
+yrs_6190 <- as.character(1961:1990)
+yrs_9124 <- as.character(1991:2024)
+
+t_6190 <- terra::app(temperature_2m_12m[[names(temperature_2m_12m) %in% yrs_6190]],
+                     fun = mean, na.rm = TRUE)
+t_9124 <- terra::app(temperature_2m_12m[[names(temperature_2m_12m) %in% yrs_9124]],
+                     fun = mean, na.rm = TRUE)
+
+dT <- t_9124 - t_6190
+names(dT) <- "ΔT (°C)"
+
+# --- 2) Escala de colores común (simétrica y fija) --------------------------
+rng     <- drop(terra::global(dT, range, na.rm = TRUE))
+max_abs <- max(abs(rng[1]), abs(rng[2]), na.rm = TRUE)
+brks    <- pretty(c(-max_abs, max_abs), n = 9)
+brks    <- sort(unique(c(brks, 0)))  # asegurar que 0 esté incluido
+
+# --- 3) Bordes de California y puntos (centroides por Lon/Lat) --------------
+if (!exists("ca")) {
+  usa <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf")
+  ca  <- subset(usa, name == "California")
+}
+ca_ll <- sf::st_transform(ca, crs = terra::crs(dT, proj = TRUE))
+
+inc_rec_pts <- incendios |>
+  dplyr::mutate(anio = lubridate::year(ALARM_DATE)) |>
+  dplyr::filter(anio >= 1991, anio <= 2024, !is.na(Lon), !is.na(Lat)) |>
+  sf::st_as_sf(coords = c("Lon", "Lat"), crs = 4326, remove = FALSE) |>
+  sf::st_transform(crs = terra::crs(dT, proj = TRUE))
+
+# --- 4) Dos mapas estáticos lado a lado; títulos fuera del mapa -------------
+tmap_mode("plot")
+
+# margen superior extra para ubicar el título en el “outer margin”
+outer_top <- 0.10
+
+m_left <-
+  tm_shape(dT) +
+  tm_raster(
+    palette = "-RdYlBu",
+    style   = "fixed",
+    breaks  = brks,
+    title   = "ΔT (°C)"
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  # título fuera del mapa (en margen superior)
+  tm_credits("ΔT (1991–2024 − 1961–1990)",
+             position = c("center", "top"),
+             size = 1.1, fontface = "bold") +
+  tm_layout(
+    legend.outside = TRUE,
+    legend.outside.position = "left",   # solo la leyenda en el panel izquierdo
+    legend.stack = "vertical",
+    outer.margins = c(outer_top, 0.02, 0.02, 0.02),
+    frame = FALSE
+  )
+
+m_right <-
+  tm_shape(dT) +
+  tm_raster(
+    palette = "-RdYlBu",
+    style   = "fixed",
+    breaks  = brks
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_shape(inc_rec_pts) +
+  tm_dots(col = "#111111", size = 0.03, alpha = 0.8, legend.show = FALSE) +
+  # título fuera del mapa (en margen superior)
+  tm_credits("ΔT + incendios (1991–2024)",
+             position = c("center", "top"),
+             size = 1.1, fontface = "bold") +
+  tm_layout(
+    legend.outside = TRUE,
+    legend.outside.position = "left",   # solo la leyenda en el panel izquierdo
+    legend.stack = "vertical",
+    outer.margins = c(outer_top, 0.02, 0.02, 0.02),
+    frame = FALSE
+  )
+
+tmap::tmap_arrange(m_left, m_right, ncol = 2, widths = c(1, 1))
+```
+
+Los mapas comparativos muestran un aumento generalizado de la temperatura media entre 1961–1990 y 1991–2024. El panel del periodo reciente exhibe tonos más cálidos en prácticamente todo el estado. La diferencia (ΔT) indica un calentamiento de ~0.5–1.0 °C en gran parte de California y núcleos de más de 1 °C en las estribaciones de la Sierra Nevada, sectores del interior sur y tramos de las cordilleras costeras, mientras que no se observan zonas amplias de enfriamiento. Al superponer los centroides de incendios recientes, se aprecia su concentración en regiones que combinan mayor ΔT, continuidad de combustibles y topografía favorable (Sierra Nevada y cadenas costeras), en contraste con el Valle Central más fragmentado por agricultura.
+
+### Precipitación
 
 ```{r}
 #| label: grafico-total-precipitation-por-anio
@@ -791,7 +1003,7 @@ precipitacion_total_anual <-
 # ggplotly(g, tooltip = "text") |> config(locale = "es")
 ```
 
-### Evolución anual de precipitación y área quemada
+#### Evolución anual de precipitación y área quemada
 
 ```{r}
 #| label: grafico-area-y-prec-plotly
@@ -882,7 +1094,7 @@ fig <- plotly::plot_ly() |>
 fig
 ```
 
-### Relación lineal entre precipitación y área quemada
+#### Relación lineal entre precipitación y área quemada
 
 ```{r}
 #| label: significacion-area-vs-precipitacion
@@ -1009,7 +1221,9 @@ fig_sig
 
 El gráfico anterior muestra que a mayor precipitación, hay menos área quemada. Por cada milímetro adicional de precipitación, se queman en promedio unas 452 hectáreas menos. El rango probable va de 930 hectáreas menos a 25 hectáreas más. El resultado es estadísticamente significativo, pero no tanto como en el caso de la precipitación y el área quemada. La precipitación por sí sola explica alrededor de un 7 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
 
-## Vulnerabilidad
+## Datos poblacionales
+
+### Vulnerabilidad por condados
 
 ```{r}
 #| label: procesamiento-mapa-vulnerabilidad
