@@ -1,7 +1,7 @@
 ---
 title: "Análisis de datos de incendios forestales en California"
 author: "Mariela Alvarado, Manuel Vargas"
-date: "2025-09-16"
+date: "2025-09-30"
 format: html
 toc: true
 lang: es
@@ -181,18 +181,18 @@ nombres_capas_variables_climaticas <- c(
   "2020", "2021", "2022", "2023", "2024"
 )
 
-names(temperature_2m_12m)           <- nombres_capas_variables_climaticas
-names(total_precipitation_12m)      <- nombres_capas_variables_climaticas
-names(wind_speed_10m_12m)           <- nombres_capas_variables_climaticas
-names(lai_low_vegetation_12m)       <- nombres_capas_variables_climaticas
+names(temperature_2m_12m)      <- nombres_capas_variables_climaticas
+names(total_precipitation_12m) <- nombres_capas_variables_climaticas
+names(wind_speed_10m_12m)      <- nombres_capas_variables_climaticas
+names(lai_low_vegetation_12m)  <- nombres_capas_variables_climaticas
 
 # Filtrar años
 yrs <- as.character(1961:2024)
 
-temperature_2m_12m           <- temperature_2m_12m[[names(temperature_2m_12m)                     %in% yrs]]
-total_precipitation_12m      <- total_precipitation_12m[[names(total_precipitation_12m)           %in% yrs]]
-wind_speed_10m_12m           <- wind_speed_10m_12m[[names(wind_speed_10m_12m)                     %in% yrs]]
-lai_low_vegetation_12m       <- lai_low_vegetation_12m[[names(lai_low_vegetation_12m)             %in% yrs]]
+temperature_2m_12m      <- temperature_2m_12m[[names(temperature_2m_12m)           %in% yrs]]
+total_precipitation_12m <- total_precipitation_12m[[names(total_precipitation_12m) %in% yrs]]
+wind_speed_10m_12m      <- wind_speed_10m_12m[[names(wind_speed_10m_12m)           %in% yrs]]
+lai_low_vegetation_12m  <- lai_low_vegetation_12m[[names(lai_low_vegetation_12m)   %in% yrs]]
 ```
 
 ```{r}
@@ -204,7 +204,8 @@ col <- c(
   cantidad_incendios = "#111111", # negro suave (cantidad de incendios)
   area_quemada       = "#D55E00", # vermillion (área quemada)
   temperatura        = "#FF0000", # temperatura (rojo)
-  precipitacion      = "#0000FF"  # precipitación (azul)
+  precipitacion      = "#0000FF", # precipitación (azul)
+  velocidad_viento   = "#56B4E9"  # velocidad del viento (azul cielo)
 )
 
 # Utilidad para transparencias cuando haga falta
@@ -777,7 +778,7 @@ ci_u <- beta + z * se_r
 # --- Tabla breve de resultados ---
 resumen <- tibble::tibble(
   indicador = c("Correlación de Pearson (r)", "Correlación de Spearman (ρ)",
-                "Pendiente β (área ~ temp)", "IC95% β", "p-valor (β)", "R² (lineal)"),
+                "Pendiente β (área ~ precipitación)", "IC95% β", "p-valor (β)", "R² (lineal)"),
   valor     = c(
     sprintf("%.3f (p=%.8f)", pear$estimate, pear$p.value),
     sprintf("%.3f (p=%.8f)", spear$estimate, spear$p.value),
@@ -1139,7 +1140,7 @@ pred_area <- tibble::tibble(
   yhat = predict(lm(area_quemada_total ~ anio, data = df_area), newdata = df_area)
 )
 pred_prec <- tibble::tibble(
-  anio = df_temp$anio,
+  anio = df_prec$anio,
   yhat = predict(lm(precipitacion ~ anio, data = df_prec), newdata = df_prec)
 )
 
@@ -1320,7 +1321,7 @@ fig_sig <- plotly::plot_ly() |>
 fig_sig
 ```
 
-El gráfico anterior muestra que a mayor precipitación, hay menos área quemada. Por cada milímetro adicional de precipitación, se queman en promedio unas 452 hectáreas menos. El rango probable va de 930 hectáreas menos a 25 hectáreas más. El resultado es estadísticamente significativo, pero no tanto como en el caso de la precipitación y el área quemada. La precipitación por sí sola explica alrededor de un 7 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
+El gráfico anterior muestra que a mayor precipitación, hay menos área quemada. Por cada milímetro adicional de precipitación, se queman en promedio unas 452 hectáreas menos. El rango probable va de 930 hectáreas menos a 25 hectáreas más. El resultado es estadísticamente significativo, pero no tanto como en el caso de la temperatura y el área quemada. La precipitación por sí sola explica alrededor de un 7 % de la variación anual. El resto depende de otros factores climáticos y de gestión.
 
 #### Diferencias entre periodos
 
@@ -1553,7 +1554,496 @@ m_right <-
 tmap::tmap_arrange(m_left, m_right, ncol = 2, widths = c(1, 1))
 ```
 
-Los mapas muestran que la precipitación media anual mantiene su máximo en las montañas costeras del norte y el sector occidental de la Sierra Nevada, mientras que el interior y el sur son más secos. La diferencia entre periodos (ΔP) sugiere un ligero a moderado descenso generalizado (≈−50 a 0 mm/año en amplias zonas) con aumentos locales (≈50–150 mm/año) en sectores puntualesl. Al sobreponer los centroides de incendios recientes, se observa su concentración en cadenas montañosas con vegetación continua.
+Los mapas muestran que la precipitación media anual mantiene su máximo en las montañas costeras del norte y el sector occidental de la Sierra Nevada, mientras que el interior y el sur son más secos. La diferencia entre periodos (ΔP) sugiere un ligero a moderado descenso generalizado (≈−50 a 0 mm/año en amplias zonas) con aumentos locales (≈50–150 mm/año) en sectores puntuales. Al sobreponer los centroides de incendios recientes, se observa su concentración en cadenas montañosas con vegetación continua.
+
+### Velocidad del viento
+
+```{r}
+#| label: grafico-10m-velocidad-viento-promedio-por-anio
+#| code-fold: true
+#| warning: false
+#| message: false
+#| echo: false 
+
+# Promedio espacial anual (una media por capa)
+vals <- drop(terra::global(wind_speed_10m_12m, mean, na.rm = TRUE)[, 1])
+
+# Años desde los nombres de las capas
+anios <- suppressWarnings(as.integer(names(wind_speed_10m_12m)))
+if (any(is.na(anios))) anios <- seq_len(nlyr(wind_speed_10m_12m))
+
+velocidad_viento_promedio_anual <- 
+  tibble(anio = anios, velocidad_viento = vals) |> 
+  arrange(anio)
+
+# g <- ggplot(
+#   temperatura_promedio_anual,
+#   aes(x = anio, y = temperatura, group = 1, 
+#       text = paste0("Año: ", anio,
+#                     "<br>Temperatura: ", scales::number(temperatura, accuracy = 0.1), " °C"))
+#   ) +
+#   geom_line(color = col["temperatura"], linewidth = 1) +
+#   geom_point(color = col["temperatura"], size = 2) +
+#   geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 0.8, color = col["temperatura"]) +
+#   labs(x = "Año", y = "Temperatura promedio a 2 m (°C)") +
+#   scale_x_continuous(breaks = cortes_anios, limits = lim_x, minor_breaks = NULL) +
+#   scale_y_continuous(labels = scales::number_format(accuracy = 0.1)) +
+#   theme_minimal(base_size = 12) +
+#   theme(panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# ggplotly(g, tooltip = "text") |> config(locale = "es")
+```
+
+#### Evolución anual de velocidad del viento y área quemada
+
+```{r}
+#| label: grafico-area-y-velocidad-viento-plotly
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Unir series ya creadas
+serie_at <-
+  dplyr::full_join(
+    dplyr::select(incendios_por_anio, anio, area_quemada_total),
+    dplyr::select(velocidad_viento_promedio_anual, anio, velocidad_viento),
+    by = "anio"
+  ) |>
+  dplyr::arrange(anio) |>
+  dplyr::mutate(
+    tt_area = paste0(
+      "Año: ", anio,
+      "<br>Área quemada: ", scales::comma(area_quemada_total), " ha"
+    ),
+    tt_vel = paste0(
+      "Año: ", anio,
+      "<br>Velocidad del viento: ", scales::number(velocidad_viento, accuracy = 0.1), " km/h"
+    )
+  )
+
+# Tendencias lineales (como en los gráficos previos)
+df_area <- tidyr::drop_na(serie_at, area_quemada_total)
+df_vel  <- tidyr::drop_na(serie_at, velocidad_viento)
+pred_area <- tibble::tibble(
+  anio = df_area$anio,
+  yhat = predict(lm(area_quemada_total ~ anio, data = df_area), newdata = df_area)
+)
+pred_vel <- tibble::tibble(
+  anio = df_vel$anio,
+  yhat = predict(lm(velocidad_viento ~ anio, data = df_vel), newdata = df_vel)
+)
+
+# Plotly con doble eje (izq: área, der: temperatura)
+fig <- plotly::plot_ly() |>
+  plotly::add_lines(
+    data = serie_at,
+    x = ~anio, y = ~area_quemada_total,
+    name = "Área quemada (ha)",
+    hovertemplate = ~tt_area,
+    line = list(color = col["area_quemada"], width = 2)
+  ) |>
+  plotly::add_lines(
+    data = serie_at,
+    x = ~anio, y = ~velocidad_viento,
+    name = "Velocidad del viento promedio a 10 m (km/h)",
+    hovertemplate = ~tt_vel,
+    line = list(color = col["velocidad_viento"], width = 2),
+    yaxis = "y2"
+  ) |>
+  # Tendencias (líneas punteadas)
+  plotly::add_lines(
+    data = pred_area, x = ~anio, y = ~yhat,
+    showlegend = FALSE, line = list(dash = "dash", width = 1, color = col["area_quemada"])
+  ) |>
+  plotly::add_lines(
+    data = pred_vel, x = ~anio, y = ~yhat,
+    showlegend = FALSE, line = list(dash = "dash", width = 1, color = col["velocidad_viento"]),
+    yaxis = "y2"
+  ) |>
+  plotly::layout(
+    xaxis = list(
+      title = "Año",
+      tickvals = cortes_anios,
+      range = c(min(lim_x), max(lim_x))
+    ),
+    yaxis = list(
+      title = "Área quemada (ha)",
+      tickformat = ",.0f"
+    ),
+    yaxis2 = list(
+      title = list(text = "Velocidad del viento promedio a 10 m (km/h)", standoff = 16),
+      overlaying = "y",
+      side = "right",
+      tickformat = ".1f",
+      automargin = TRUE
+    ),
+    legend = list(orientation = "h", x = 0, y = 1.15),
+    margin = list(t = 90, r = 80, b = 60, l = 60)
+  ) |>
+  plotly::config(locale = "es", displayModeBar = TRUE)
+
+fig
+```
+
+#### Relación lineal entre velocidad del viento y área quemada
+
+```{r}
+#| label: significacion-area-vs-velocidad-viento
+#| code-fold: true
+#| warning: false
+#| message: false
+
+suppressWarnings({
+  library(lmtest)
+  library(sandwich)
+  library(knitr)
+  library(kableExtra)
+})
+
+# --- Unir y alistar datos (nombres únicos para evitar choques con otros 'df') ---
+df_wind <- dplyr::inner_join(
+  dplyr::select(incendios_por_anio, anio, area_quemada_total),
+  dplyr::select(velocidad_viento_promedio_anual, anio, velocidad_viento),
+  by = "anio"
+) |>
+  dplyr::arrange(anio) |>
+  tidyr::drop_na()
+
+# --- Correlaciones ---
+pear_wind  <- cor.test(df_wind$area_quemada_total, df_wind$velocidad_viento, method = "pearson")
+spear_wind <- cor.test(df_wind$area_quemada_total, df_wind$velocidad_viento, method = "spearman")
+
+# --- Regresión lineal con SE robustos Newey–West ---
+mod_wind    <- lm(area_quemada_total ~ velocidad_viento, data = df_wind)
+nw_lag_wind <- max(1L, floor(4 * (nrow(df_wind) / 100)^(2/9)))
+ct_wind     <- lmtest::coeftest(
+  mod_wind, vcov = sandwich::NeweyWest(mod_wind, lag = nw_lag_wind, prewhite = TRUE, adjust = TRUE)
+)
+
+beta_wind <- unname(ct_wind["velocidad_viento", "Estimate"])
+se_wind   <- unname(ct_wind["velocidad_viento", "Std. Error"])
+pval_wind <- unname(ct_wind["velocidad_viento", "Pr(>|t|)"])
+r2_wind   <- summary(mod_wind)$r.squared
+
+# IC95%
+ci_l_wind <- beta_wind - 1.96 * se_wind
+ci_u_wind <- beta_wind + 1.96 * se_wind
+
+# --- Tabla breve de resultados ---
+resumen_wind <- tibble::tibble(
+  indicador = c(
+    "Correlación de Pearson (r)",
+    "Correlación de Spearman (ρ)",
+    "Pendiente β (área ~ vel. viento)",
+    "IC95% β",
+    "p-valor (β)",
+    "R² (lineal)"
+  ),
+  valor = c(
+    sprintf("%.3f (p=%.8f)", pear_wind$estimate,  pear_wind$p.value),
+    sprintf("%.3f (p=%.8f)", spear_wind$estimate, spear_wind$p.value),
+    sprintf("%.3f", beta_wind),
+    sprintf("[%.3f, %.3f]", ci_l_wind, ci_u_wind),
+    sprintf("%.4g", pval_wind),
+    sprintf("%.3f", r2_wind)
+  )
+)
+
+knitr::kable(
+  resumen_wind,
+  format    = "html",
+  col.names = c("Indicador", "Valor"),
+  align     = c("l", "r"),
+  caption   = sprintf("Resultados (n = %d; lag Newey–West = %d)", nrow(df_wind), nw_lag_wind)
+) |>
+  kableExtra::kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position   = "center"
+  )
+```
+
+```{r}
+#| label: scatter-significacion-area-vs-velocidad-viento
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# Recta de ajuste
+pred_line_wind <- tibble::tibble(
+  velocidad_viento = seq(min(df_wind$velocidad_viento, na.rm = TRUE),
+                         max(df_wind$velocidad_viento, na.rm = TRUE), length.out = 100)
+)
+pred_line_wind$area_fit <- predict(mod_wind, newdata = pred_line_wind)
+
+fig_sig <- plotly::plot_ly() |>
+  plotly::add_markers(
+    data = df_wind,
+    x = ~velocidad_viento, y = ~area_quemada_total,
+    name = "Datos",
+    hovertemplate = paste0(
+      "Año: %{customdata}<br>",
+      "Velocidad del viento: %{x:.1f} km/h<br>",
+      "Área quemada: %{y:,.0f} ha<extra></extra>"
+    ),
+    customdata = df_wind$anio
+  ) |>
+  plotly::add_lines(
+    data = pred_line_wind,
+    x = ~velocidad_viento, y = ~area_fit,
+    name = "Ajuste lineal",
+    line = list(dash = "solid", width = 2)
+  ) |>
+  plotly::layout(
+    xaxis  = list(title = "Velocidad del viento promedio a 10 m (km/h)", tickformat = ".1f"),
+    yaxis  = list(title = "Área quemada (ha)", tickformat = ",.0f"),
+    legend = list(orientation = "h", x = 0, y = 1.15),
+    margin = list(t = 90, r = 40, b = 60, l = 60),
+    annotations = list(
+      list(
+        x = 0.02, y = 0.98, xref = "paper", yref = "paper",
+        text = sprintf("R² = %.3f<br>β = %.3f (IC95%% %.3f, %.3f)<br>p = %.4g",
+                       r2_wind, beta_wind, ci_l_wind, ci_u_wind, pval_wind),
+        showarrow = FALSE, align = "left", bgcolor = "rgba(255,255,255,0.8)",
+        bordercolor = "rgba(0,0,0,0.2)", borderwidth = 1, borderpad = 4
+      )
+    )
+  ) |>
+  plotly::config(locale = "es", displayModeBar = TRUE)
+
+fig_sig
+```
+
+El cuadro y el gráfico muestran una tendencia positiva débil: a mayor velocidad del viento promedio anual a 10 m, tiende a quemarse más área. La pendiente del modelo lineal es de ≈ 344 mil ha por cada 1 km/h adicional (β = 343 801), pero el intervalo de confianza es amplio e incluye 0 (IC95%: −108 066 a 795 669 ha) y el efecto no es estadísticamente significativo al 5 % (p = 0.141). En conjunto, el modelo explica ~4 % de la variación anual (R² = 0.042). Spearman es débil pero significativo (ρ = 0.267, p ≈ 0.033), lo que sugiere que los años relativamente más ventosos suelen coincidir con mayor área quemada.
+
+#### Diferencias entre periodos
+
+```{r}
+#| label: comparacion-velocidad-viento-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- Si no existe, construir la serie anual de velocidad del viento (km/h) ---
+if (!exists("velocidad_viento_promedio_anual")) {
+  # Promedio espacial anual por capa del ráster
+  vals_w  <- drop(terra::global(wind_speed_10m_12m, mean, na.rm = TRUE)[, 1])
+  anios_w <- suppressWarnings(as.integer(names(wind_speed_10m_12m)))
+  if (any(is.na(anios_w))) anios_w <- seq_len(terra::nlyr(wind_speed_10m_12m))
+
+  velocidad_viento_promedio_anual <-
+    tibble::tibble(anio = anios_w, velocidad_viento = vals_w) |>
+    dplyr::arrange(anio)
+}
+
+# --- Resumen por periodos ----------------------------------------------------
+tabla_periodos_vv <-
+  velocidad_viento_promedio_anual |>
+  dplyr::filter(anio >= 1961, anio <= 2024) |>
+  dplyr::mutate(
+    periodo = dplyr::if_else(anio <= 1990, "1961–1990", "1991–2024")
+  ) |>
+  dplyr::group_by(periodo) |>
+  dplyr::summarise(
+    vel_promedio_kmh = mean(velocidad_viento, na.rm = TRUE),  # km/h promedio del periodo
+    n_anios          = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(periodo = factor(periodo, levels = c("1961–1990", "1991–2024"))) |>
+  dplyr::arrange(periodo)
+
+# --- Delta absoluto y relativo (reciente − base) -----------------------------
+a_w     <- tabla_periodos_vv$vel_promedio_kmh[1]
+b_w     <- tabla_periodos_vv$vel_promedio_kmh[2]
+delta_w <- b_w - a_w
+pct_w   <- if (is.na(a_w) || a_w == 0) NA_real_ else delta_w / a_w
+
+# --- Gráfico: velocidad del viento promedio por periodo ----------------------
+plotly::plot_ly(
+  data = tabla_periodos_vv,
+  x    = ~periodo,
+  y    = ~vel_promedio_kmh,
+  type = "bar",
+  text = ~scales::number(vel_promedio_kmh, accuracy = 0.1),
+  textposition = "outside",
+  hovertemplate = paste(
+    "<b>%{x}</b><br>",
+    "Velocidad prom.: %{y:.1f} km/h<br>",
+    "Años en el periodo: %{customdata}<extra></extra>"
+  ),
+  customdata = ~n_anios,
+  marker = list(color = col["velocidad_viento"])
+) |>
+plotly::layout(
+  title = "Velocidad del viento promedio a 10 m por periodo (promedio anual)",
+  yaxis = list(title = "km/h", tickformat = ".1f"),
+  xaxis = list(title = ""),
+  showlegend = FALSE,
+  margin = list(t = 80, r = 30, b = 40, l = 70),
+  annotations = list(
+    list(
+      x = 0.5, y = 1.12, xref = "paper", yref = "paper",
+      text = paste0(
+        "Δ = ", scales::number(delta_w, accuracy = 0.1), " km/h",
+        if (!is.na(pct_w)) paste0(" (", scales::percent(pct_w, accuracy = 0.1), ")") else ""
+      ),
+      showarrow = FALSE, font = list(size = 12)
+    )
+  )
+) |>
+plotly::config(locale = "es", displayModeBar = FALSE)
+```
+
+El gráfico indica un leve aumento de la velocidad media anual del viento entre 1961–1990 y 1991–2024: 3.6 → 3.7 km/h, es decir Δ = +0.1 km/h (+3.0 %).
+
+```{r}
+#| label: mapas-velocidad-viento-facets-por-periodo
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- 1) Promedios por periodo (km/h) ----------------------------------------
+yrs_6190 <- as.character(1961:1990)
+yrs_9124 <- as.character(1991:2024)
+
+w_6190 <- terra::app(
+  wind_speed_10m_12m[[names(wind_speed_10m_12m) %in% yrs_6190]],
+  mean, na.rm = TRUE
+)
+w_9124 <- terra::app(
+  wind_speed_10m_12m[[names(wind_speed_10m_12m) %in% yrs_9124]],
+  mean, na.rm = TRUE
+)
+
+names(w_6190) <- "1961–1990"
+names(w_9124) <- "1991–2024"
+
+r_per_w <- c(w_6190, w_9124)  # stack con 2 capas (una por periodo)
+
+# --- 2) Misma escala de colores en ambos mapas ------------------------------
+mm   <- terra::minmax(r_per_w)
+rng  <- range(mm, na.rm = TRUE)
+brks <- pretty(rng, n = 9)    # cortes fijos => comparables
+
+# --- 3) Borde de California (contexto) --------------------------------------
+if (!exists("ca")) {
+  usa <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf")
+  ca  <- subset(usa, name == "California")
+}
+ca_ll <- sf::st_transform(ca, crs = terra::crs(r_per_w, proj = TRUE))
+
+# --- 4) Mapas lado a lado (facets) ------------------------------------------
+tmap_mode("plot")
+
+tm_shape(r_per_w) +
+  tm_raster(
+    palette = "YlGnBu",
+    style   = "fixed",
+    breaks  = brks,
+    title   = "Veloc. promedio (km/h)"
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_facets(ncol = 2, free.scales = FALSE) +
+  tm_layout(
+    legend.outside = TRUE,
+    legend.format  = list(text.separator = " a "),
+    frame = FALSE
+  )
+```
+
+```{r}
+#| label: mapas-diferencia-velocidad-viento-facets-estatico-titulos-fuera
+#| code-fold: true
+#| warning: false
+#| message: false
+
+# --- 1) Promedios por periodo (km/h) y diferencia ---------------------------
+yrs_6190 <- as.character(1961:1990)
+yrs_9124 <- as.character(1991:2024)
+
+w_6190 <- terra::app(
+  wind_speed_10m_12m[[names(wind_speed_10m_12m) %in% yrs_6190]],
+  mean, na.rm = TRUE
+)
+w_9124 <- terra::app(
+  wind_speed_10m_12m[[names(wind_speed_10m_12m) %in% yrs_9124]],
+  mean, na.rm = TRUE
+)
+
+dV <- w_9124 - w_6190                       # ΔV (reciente − base)
+names(dV) <- "ΔV (km/h)"
+
+# --- 2) Escala de colores común (simétrica alrededor de 0) ------------------
+rng     <- drop(terra::global(dV, range, na.rm = TRUE))
+max_abs <- max(abs(rng[1]), abs(rng[2]), na.rm = TRUE)
+brks    <- pretty(c(-max_abs, max_abs), n = 9)
+brks    <- sort(unique(c(brks, 0)))         # asegurar que 0 esté incluido
+
+# --- 3) Bordes de California y puntos (centroides por Lon/Lat) --------------
+if (!exists("ca")) {
+  usa <- rnaturalearth::ne_states(country = "United States of America", returnclass = "sf")
+  ca  <- subset(usa, name == "California")
+}
+ca_ll <- sf::st_transform(ca, crs = terra::crs(dV, proj = TRUE))
+
+inc_rec_pts <- incendios |>
+  dplyr::mutate(anio = lubridate::year(ALARM_DATE)) |>
+  dplyr::filter(anio >= 1991, anio <= 2024, !is.na(Lon), !is.na(Lat)) |>
+  sf::st_as_sf(coords = c("Lon", "Lat"), crs = 4326, remove = FALSE) |>
+  sf::st_transform(crs = terra::crs(dV, proj = TRUE))
+
+# --- 4) Dos mapas estáticos lado a lado; títulos fuera del mapa -------------
+tmap_mode("plot")
+
+outer_top <- 0.10  # margen superior para ubicar títulos fuera del mapa
+
+# Izquierda: solo raster de diferencia con leyenda
+m_left <-
+  tm_shape(dV) +
+  tm_raster(
+    palette = "YlGnBu",
+    style   = "fixed",
+    breaks  = brks,
+    title   = "ΔV (km/h)"
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_credits("ΔV (1991–2024 − 1961–1990)",
+             position = c("center", "top"),
+             size = 1.1, fontface = "bold") +
+  tm_layout(
+    legend.outside = TRUE,
+    legend.outside.position = "left",
+    legend.stack = "vertical",
+    outer.margins = c(outer_top, 0.02, 0.02, 0.02),
+    frame = FALSE
+  )
+
+# Derecha: mismo raster + puntos, sin leyenda
+m_right <-
+  tm_shape(dV) +
+  tm_raster(
+    palette = "YlGnBu",
+    style   = "fixed",
+    breaks  = brks
+  ) +
+  tm_shape(ca_ll) + tm_borders(col = "#424242", lwd = 0.6) +
+  tm_shape(inc_rec_pts) +
+  tm_dots(col = "#111111", size = 0.03, alpha = 0.8, legend.show = FALSE) +
+  tm_credits("ΔV + incendios (1991–2024)",
+             position = c("center", "top"),
+             size = 1.1, fontface = "bold") +
+  tm_layout(
+    legend.outside = TRUE,
+    legend.outside.position = "left",
+    legend.stack = "vertical",
+    outer.margins = c(outer_top, 0.02, 0.02, 0.02),
+    frame = FALSE
+  )
+
+tmap::tmap_arrange(m_left, m_right, ncol = 2, widths = c(1, 1))
+```
+
+Los mapas muestran que la velocidad media anual del viento es mayor en las montañas costeras y en sectores expuestos del interior, mientras que el Valle Central y algunas cuencas presentan valores menores. La diferencia entre periodos (ΔV) indica un aumento leve a moderado en gran parte del estado (≈ 0.2–0.6 km/h en amplias zonas), con descensos locales puntuales (≈ −0.4–0 km/h). Al superponer los centroides de incendios recientes, se aprecia su concentración en cadenas montañosas
 
 ## Datos poblacionales
 
